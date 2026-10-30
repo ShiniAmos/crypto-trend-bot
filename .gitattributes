@@ -1,0 +1,7 @@
+# Shell scripts and unit files must keep LF endings: a CRLF here breaks the Linux installer
+# ("set: pipefail: invalid option name"), which is exactly how the first VPS install failed.
+*.sh            text eol=lf
+*.service       text eol=lf
+deploy/crontab  text eol=lf
+deploy/logrotate text eol=lf
+*.bat           text eol=crlf

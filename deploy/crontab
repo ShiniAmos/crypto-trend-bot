@@ -1,0 +1,3 @@
+# crontab -e (as user bot). The loop already rebuilds the universe and appends history daily;
+# the watchdog is separate so it still fires when the loop itself is dead.
+*/30 * * * * cd /opt/bot && venv/bin/python -m app.main watchdog >> /var/log/crypto-bot-watchdog.log 2>&1

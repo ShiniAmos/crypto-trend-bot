@@ -1,0 +1,26 @@
+# /etc/systemd/system/crypto-bot-fleet.service
+#
+# One engine, every account. Replaces crypto-bot, crypto-bot100 and crypto-bot-demo: they ran the
+# same scan three times over on a 1 GB box, which is what exhausted its memory on 4 Oct 2026.
+# The fleet scores the market once per cycle and hands the result to each book.
+#
+# MemoryMax is a backstop, not a target: if this ever balloons again, systemd kills and restarts it
+# instead of taking the website and SSH down with it.
+[Unit]
+Description=Crypto bot fleet (paper, small wallet and Binance demo from one engine)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=bot
+WorkingDirectory=/opt/bot
+ExecStart=/opt/bot/venv/bin/python -m app.main fleet
+Restart=always
+RestartSec=10
+MemoryMax=600M
+MemoryHigh=450M
+StandardOutput=append:/var/log/crypto-bot-fleet.log
+StandardError=append:/var/log/crypto-bot-fleet.log
+
+[Install]
+WantedBy=multi-user.target

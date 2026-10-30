@@ -1,0 +1,10 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/opt/bot/data
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}

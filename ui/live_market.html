@@ -1,0 +1,361 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root {
+    --bg: #0b0e11; --panel: #181a20; --panel-2: #1e2329; --line: #2b3139;
+    --text: #eaecef; --muted: #848e9c; --up: #0ecb81; --down: #f6465d; --accent: #f0b90b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 13px/1.4 "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .num { font-variant-numeric: tabular-nums; }
+  .up { color: var(--up); } .down { color: var(--down); } .muted { color: var(--muted); }
+  .wrap { display: grid; grid-template-columns: 340px 1fr; gap: 8px; min-height: 100vh; padding: 8px; }
+  .card { background: var(--panel); border-radius: 8px; overflow: hidden; }
+
+  /* market list */
+  .list-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px 8px; }
+  .list-head h2 { margin: 0; font-size: 15px; }
+  .status { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.live { background: var(--up); box-shadow: 0 0 6px var(--up); }
+  .dot.bad { background: var(--down); }
+  .search { margin: 0 14px 8px; width: calc(100% - 28px); background: var(--panel-2); border: 1px solid var(--line);
+            border-radius: 6px; color: var(--text); padding: 7px 10px; font: inherit; }
+  .search:focus { outline: none; border-color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; }
+  th { color: var(--muted); font-weight: 400; font-size: 12px; text-align: right; padding: 4px 14px; }
+  th:first-child, td:first-child { text-align: left; }
+  td { padding: 7px 14px; text-align: right; white-space: nowrap; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--panel-2); }
+  tbody tr.sel { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--accent); }
+  .coin { font-weight: 600; } .quote { color: var(--muted); font-size: 11px; }
+  .tag { display: inline-block; font-size: 10px; padding: 1px 5px; border-radius: 3px; margin-left: 4px;
+         vertical-align: 1px; font-weight: 600; }
+  .tag.hold { background: rgba(240,185,11,.15); color: var(--accent); }
+  .tag.sig { background: rgba(14,203,129,.15); color: var(--up); }
+  .flash-up { animation: fu .6s; } .flash-down { animation: fd .6s; }
+  @keyframes fu { from { background: rgba(14,203,129,.25); } to { background: transparent; } }
+  @keyframes fd { from { background: rgba(246,70,93,.25); } to { background: transparent; } }
+
+  /* coin panel */
+  .right { display: grid; grid-template-rows: auto auto 1fr; gap: 8px; min-width: 0; }
+  .ticker { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; padding: 14px 16px; }
+  .ticker .name { font-size: 20px; font-weight: 700; }
+  .ticker .price { font-size: 24px; font-weight: 700; }
+  .stat .k { color: var(--muted); font-size: 11px; } .stat .v { font-size: 13px; }
+  .ticker a { margin-left: auto; color: var(--accent); text-decoration: none; font-weight: 600; }
+  .ticker a:hover { text-decoration: underline; }
+  .holding { padding: 0 16px 12px; color: var(--accent); font-size: 13px; }
+  .chart-card { padding: 8px 10px 10px; }
+  .tfs { display: flex; gap: 4px; margin-bottom: 6px; }
+  .tfs button { background: none; border: 0; color: var(--muted); padding: 4px 9px; border-radius: 4px;
+                cursor: pointer; font: inherit; }
+  .tfs button.on { color: var(--text); background: var(--panel-2); }
+  #chart { height: 400px; }
+  .lower { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; min-height: 0; }
+  .lower h3 { margin: 0; padding: 10px 14px 4px; font-size: 13px; }
+  .book td, .trades td { padding: 2px 14px; font-size: 12px; position: relative; }
+  .book .bar { position: absolute; top: 0; bottom: 0; right: 0; opacity: .15; }
+  .mid { font-size: 16px; font-weight: 700; padding: 6px 14px; }
+  .lat { font-size: 11px; color: var(--muted); }
+  @media (max-width: 900px) {
+    .wrap { grid-template-columns: 1fr; }
+    .lower { grid-template-columns: 1fr; }
+    #chart { height: 320px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="list-head">
+      <h2>Market</h2>
+      <div class="status"><span id="dot" class="dot"></span><span id="status">Connecting…</span></div>
+    </div>
+    <input id="q" class="search" placeholder="Search coin" autocomplete="off">
+    <table>
+      <thead><tr><th>Coin</th><th>Price (USDT)</th><th>24h</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <div class="right">
+    <div class="card">
+      <div class="ticker">
+        <div class="name" id="t-name">—</div>
+        <div><div class="price num" id="t-price">—</div><div class="lat num" id="t-lat"></div></div>
+        <div class="stat"><div class="k">24h change</div><div class="v num" id="t-chg">—</div></div>
+        <div class="stat"><div class="k">24h high</div><div class="v num" id="t-high">—</div></div>
+        <div class="stat"><div class="k">24h low</div><div class="v num" id="t-low">—</div></div>
+        <div class="stat"><div class="k">24h volume (USDT)</div><div class="v num" id="t-vol">—</div></div>
+        <a id="t-link" href="#" target="_blank" rel="noopener">Open on Binance ↗</a>
+      </div>
+      <div class="holding num" id="t-hold" hidden></div>
+    </div>
+
+    <div class="card chart-card">
+      <div class="tfs" id="tfs"></div>
+      <div id="chart"></div>
+    </div>
+
+    <div class="lower">
+      <div class="card book">
+        <h3>Order book</h3>
+        <table><thead><tr><th>Price</th><th>Amount</th><th>Total (USDT)</th></tr></thead><tbody id="asks"></tbody></table>
+        <div class="mid num" id="mid">—</div>
+        <table><tbody id="bids"></tbody></table>
+      </div>
+      <div class="card trades">
+        <h3>Recent trades</h3>
+        <table><thead><tr><th>Price</th><th>Amount</th><th>Time</th></tr></thead><tbody id="trades"></tbody></table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const CFG = __CONFIG__;   // {symbols: [...], held: {SYM: entryPrice}, signals: [...]}
+const REST = ["https://data-api.binance.vision", "https://api.binance.com"];
+const WS = ["wss://data-stream.binance.vision/stream", "wss://stream.binance.com:9443/stream"];
+const TFS = [["1m","1m"],["15m","15m"],["1h","1h"],["4h","4h"],["1d","1D"]];
+
+const state = {};            // symbol -> {price, open, high, low, qv, prev}
+let sel = CFG.symbols.includes(CFG.start) ? CFG.start : CFG.symbols[0];
+let tf = "15m";
+let restBase = REST[0];
+
+// ---------- helpers
+const $ = id => document.getElementById(id);
+const base = s => s.replace(/USDT$/, "");
+function dp(p) { return p >= 1000 ? 2 : p >= 10 ? 3 : p >= 1 ? 4 : p >= 0.01 ? 5 : 7; }
+function fp(p) { return p == null ? "—" : Number(p).toLocaleString("en-US", {minimumFractionDigits: dp(p), maximumFractionDigits: dp(p)}); }
+function fpct(x) { return (x >= 0 ? "+" : "") + x.toFixed(2) + "%"; }
+function fbig(x) { return x >= 1e9 ? (x/1e9).toFixed(2)+"B" : x >= 1e6 ? (x/1e6).toFixed(2)+"M" : x >= 1e3 ? (x/1e3).toFixed(1)+"K" : x.toFixed(2); }
+async function getJSON(path) {
+  for (const b of [restBase, ...REST.filter(x => x !== restBase)]) {
+    try { const r = await fetch(b + path); if (r.ok) { restBase = b; return await r.json(); } } catch (e) {}
+  }
+  throw new Error("Binance unreachable");
+}
+// A socket that never gives up: reconnects within 0.5-5 s (alternating Binance hosts), at once
+// when the computer comes back online, and if the stream goes silent for 10 s.
+function openSocket(streams, onMsg, onState) {
+  let i = 0, ws, closed = false, retry = 500, last = Date.now(), timer = null;
+  const connect = () => {
+    clearTimeout(timer); timer = null;
+    if (closed) return;
+    try { ws = new WebSocket(WS[i % WS.length] + "?streams=" + streams.join("/")); }
+    catch (e) { return schedule(); }
+    ws.onopen = () => { retry = 500; last = Date.now(); onState && onState(true); };
+    ws.onmessage = e => { last = Date.now(); onMsg(JSON.parse(e.data)); };
+    ws.onclose = () => { if (!closed) { onState && onState(false); i++; schedule(); } };
+    ws.onerror = () => ws.close();
+  };
+  const schedule = () => { if (!timer) { timer = setTimeout(connect, retry); retry = Math.min(retry * 2, 5000); } };
+  const now = () => { retry = 500; if (ws) ws.close(); else connect(); };
+  window.addEventListener("online", now);
+  const watchdog = setInterval(() => { if (ws && ws.readyState === 1 && Date.now() - last > 10000) ws.close(); }, 2000);
+  connect();
+  return { close() { closed = true; clearInterval(watchdog); window.removeEventListener("online", now); ws && ws.close(); } };
+}
+
+// Last known prices survive a reload or an offline start (kept in this browser only).
+function saveCache() { try { localStorage.setItem("lm-cache", JSON.stringify({ t: Date.now(), state })); } catch (e) {} }
+function loadCache() { try { return JSON.parse(localStorage.getItem("lm-cache")); } catch (e) { return null; } }
+
+// ---------- market list
+function rowHTML(s) {
+  const tags = (CFG.held[s] ? '<span class="tag hold">HOLDING</span>' : "") +
+               (CFG.signals.includes(s) ? '<span class="tag sig">BUY SIGNAL</span>' : "");
+  return `<tr id="r-${s}" data-s="${s}"><td><span class="coin">${base(s)}</span><span class="quote">/USDT</span>${tags}</td>` +
+         `<td class="num" id="p-${s}">—</td><td class="num" id="c-${s}">—</td></tr>`;
+}
+function drawList() {
+  const q = $("q").value.trim().toUpperCase();
+  $("rows").innerHTML = CFG.symbols.filter(s => !q || s.includes(q)).map(rowHTML).join("");
+  CFG.symbols.forEach(paintRow);
+  markSel();
+}
+function paintRow(s) {
+  const d = state[s], p = $("p-" + s), c = $("c-" + s);
+  if (!d || !p) return;
+  p.textContent = fp(d.price);
+  const chg = (d.price / d.open - 1) * 100;
+  c.textContent = fpct(chg); c.className = "num " + (chg >= 0 ? "up" : "down");
+  p.className = "num " + (chg >= 0 ? "up" : "down");
+}
+function flash(s, dir) {
+  const r = $("r-" + s); if (!r) return;
+  r.classList.remove("flash-up", "flash-down"); void r.offsetWidth; r.classList.add(dir > 0 ? "flash-up" : "flash-down");
+}
+function markSel() { document.querySelectorAll("#rows tr").forEach(tr => tr.classList.toggle("sel", tr.dataset.s === sel)); }
+$("rows").addEventListener("click", e => { const tr = e.target.closest("tr"); if (tr) select(tr.dataset.s); });
+$("q").addEventListener("input", drawList);
+
+// ---------- ticker header
+function paintHeader() {
+  const d = state[sel]; if (!d) return;
+  const chg = (d.price / d.open - 1) * 100, cls = chg >= 0 ? "up" : "down";
+  $("t-name").textContent = base(sel) + "/USDT";
+  $("t-price").textContent = fp(d.price); $("t-price").className = "price num " + cls;
+  $("t-chg").textContent = fpct(chg); $("t-chg").className = "v num " + cls;
+  $("t-high").textContent = fp(d.high); $("t-low").textContent = fp(d.low); $("t-vol").textContent = fbig(d.qv);
+  $("mid").textContent = fp(d.price); $("mid").className = "mid num " + cls;
+  const entry = CFG.held[sel];
+  $("t-hold").hidden = !entry;
+  if (entry) {
+    const pl = (d.price / entry - 1) * 100;
+    $("t-hold").innerHTML = `The bot holds this coin: bought at ${fp(entry)}, now <span class="${pl >= 0 ? "up" : "down"}">${fpct(pl)}</span>`;
+  }
+}
+
+// ---------- chart
+const chart = LightweightCharts.createChart($("chart"), {
+  layout: { background: { color: "#181a20" }, textColor: "#848e9c", fontSize: 11 },
+  grid: { vertLines: { color: "#22262d" }, horzLines: { color: "#22262d" } },
+  rightPriceScale: { borderColor: "#2b3139" }, timeScale: { borderColor: "#2b3139", timeVisible: true },
+  crosshair: { mode: 0 }, autoSize: true,
+});
+const candles = chart.addCandlestickSeries({ upColor: "#0ecb81", downColor: "#f6465d", borderVisible: false,
+  wickUpColor: "#0ecb81", wickDownColor: "#f6465d" });
+const volume = chart.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "vol" });
+chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+let entryLine = null;
+
+$("tfs").innerHTML = TFS.map(([v, l]) => `<button data-tf="${v}">${l}</button>`).join("");
+$("tfs").addEventListener("click", e => { const b = e.target.closest("button"); if (b) { tf = b.dataset.tf; loadCoin(); } });
+
+function bar(k) {   // REST array or WS kline object -> chart points
+  const [t, o, h, l, c, v] = Array.isArray(k) ? [k[0], k[1], k[2], k[3], k[4], k[5]] : [k.t, k.o, k.h, k.l, k.c, k.v];
+  const time = Math.floor(t / 1000);
+  return [{ time, open: +o, high: +h, low: +l, close: +c },
+          { time, value: +v, color: +c >= +o ? "rgba(14,203,129,.4)" : "rgba(246,70,93,.4)" }];
+}
+
+// ---------- order book + trades
+function paintBook(bids, asks) {
+  const rows = (arr, cls) => {
+    const max = Math.max(...arr.map(([p, q]) => p * q), 1);
+    return arr.map(([p, q]) => `<tr><td class="num ${cls}">${fp(+p)}</td><td class="num">${(+q).toFixed(4)}</td>` +
+      `<td class="num">${fbig(p * q)}<span class="bar" style="width:${(p*q/max*100).toFixed(0)}%;background:var(--${cls})"></span></td></tr>`).join("");
+  };
+  $("asks").innerHTML = rows(asks.slice(0, 10).reverse(), "down");
+  $("bids").innerHTML = rows(bids.slice(0, 10), "up");
+}
+let trades = [];
+function paintTrades() {
+  $("trades").innerHTML = trades.map(t => `<tr><td class="num ${t.m ? "down" : "up"}">${fp(+t.p)}</td>` +
+    `<td class="num">${(+t.q).toFixed(4)}</td><td class="num muted">${new Date(t.T).toLocaleTimeString()}</td></tr>`).join("");
+}
+
+// ---------- selecting a coin opens its live market
+let coinSock = null;
+function select(s) { sel = s; markSel(); paintHeader(); loadCoin(); }
+async function loadCoin() {
+  document.querySelectorAll("#tfs button").forEach(b => b.classList.toggle("on", b.dataset.tf === tf));
+  $("t-link").href = `https://www.binance.com/en/trade/${base(sel)}_USDT?type=spot`;
+  coinSock && coinSock.close();
+  trades = []; paintTrades();
+  const s = sel, t = tf;
+  let kl, depth, recent;
+  try {
+    [kl, depth, recent] = await Promise.all([
+      getJSON(`/api/v3/klines?symbol=${s}&interval=${t}&limit=500`),
+      getJSON(`/api/v3/depth?symbol=${s}&limit=20`),
+      getJSON(`/api/v3/trades?symbol=${s}&limit=25`),
+    ]);
+  } catch (e) {   // offline: keep what is on screen and try again shortly
+    $("t-lat").textContent = "offline · reconnecting…";
+    setTimeout(() => { if (s === sel && t === tf) loadCoin(); }, 3000);
+    return;
+  }
+  if (s !== sel || t !== tf) return;   // user clicked something else meanwhile
+  const pts = kl.map(bar);
+  candles.setData(pts.map(p => p[0])); volume.setData(pts.map(p => p[1]));
+  candles.applyOptions({ priceFormat: { type: "price", precision: dp(+kl[kl.length - 1][4]), minMove: 1 / 10 ** dp(+kl[kl.length - 1][4]) } });
+  entryLine && candles.removePriceLine(entryLine); entryLine = null;
+  if (CFG.held[s]) entryLine = candles.createPriceLine({ price: CFG.held[s], color: "#f0b90b", lineWidth: 1, lineStyle: 2, title: "bot bought" });
+  chart.timeScale().fitContent();
+  paintBook(depth.bids, depth.asks);
+  trades = recent.reverse().map(r => ({ p: r.price, q: r.qty, T: r.time, m: r.isBuyerMaker })); paintTrades();
+  const lc = s.toLowerCase();
+  let dropped = false;
+  coinSock = openSocket([`${lc}@kline_${t}`, `${lc}@depth20@100ms`, `${lc}@trade`], m => {
+    if (s !== sel) return;
+    const d = m.data;
+    if (m.stream.includes("@kline")) { const [c, v] = bar(d.k); candles.update(c); volume.update(v); }
+    else if (m.stream.includes("@depth")) paintBook(d.bids, d.asks);
+    else if (d.e === "trade") { trades.unshift({ p: d.p, q: d.q, T: d.T, m: d.m }); trades = trades.slice(0, 25); pendingTrades = true; }
+  }, ok => {
+    if (!ok) { dropped = true; $("t-lat").textContent = "offline · reconnecting…"; }
+    else if (dropped && s === sel) loadCoin();   // back online: refill candles missed while offline
+  });
+}
+let pendingTrades = false;
+
+// ---------- live prices for every coin (each trade, not a 1-second snapshot)
+let dirty = new Set(), lastTrade = null;
+function onMarket(m) {
+  const d = m.data, s = d.s, st = state[s] || (state[s] = {});
+  if (d.e === "24hrMiniTicker") { st.open = +d.o; st.high = +d.h; st.low = +d.l; st.qv = +d.q; if (st.price == null) st.price = +d.c; }
+  else if (d.e === "aggTrade") {
+    const p = +d.p;
+    if (st.price != null && p !== st.price) flash(s, p > st.price ? 1 : -1);
+    st.price = p;
+    if (s === sel) lastTrade = d.T;
+  }
+  dirty.add(s);
+}
+function frame() {
+  dirty.forEach(paintRow);
+  if (dirty.has(sel)) {
+    paintHeader();
+    if (lastTrade != null) $("t-lat").textContent = `live · last trade ${new Date(lastTrade).toLocaleTimeString()}`;
+  }
+  dirty.clear();
+  if (pendingTrades) { paintTrades(); pendingTrades = false; }
+}
+
+async function loadTickers() {
+  const t = await getJSON(`/api/v3/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(CFG.symbols))}`);
+  t.forEach(x => state[x.symbol] = { price: +x.lastPrice, open: +x.openPrice, high: +x.highPrice, low: +x.lowPrice, qv: +x.quoteVolume });
+  CFG.symbols.forEach(paintRow); paintHeader();
+}
+
+async function start() {
+  drawList();
+  let offlineFrom = null;
+  try { await loadTickers(); }
+  catch (e) {   // offline at start: show the last prices this browser saw
+    const c = loadCache();
+    if (c) { Object.assign(state, c.state); CFG.symbols.forEach(paintRow); offlineFrom = c.t; }
+    $("dot").className = "dot bad";
+    $("status").textContent = c ? `Offline · prices from ${new Date(c.t).toLocaleTimeString()}` : "Offline";
+  }
+  const streams = CFG.symbols.flatMap(s => [s.toLowerCase() + "@miniTicker", s.toLowerCase() + "@aggTrade"]);
+  let wasDown = offlineFrom !== null;
+  openSocket(streams, onMarket, ok => {
+    $("dot").className = "dot " + (ok ? "live" : "bad");
+    if (ok) {
+      $("status").textContent = "Live";
+      if (wasDown) loadTickers().catch(() => {});   // refresh 24h stats after an outage
+      wasDown = false;
+    } else {
+      wasDown = true;
+      $("status").textContent = `Offline · reconnecting… (prices from ${new Date().toLocaleTimeString()})`;
+    }
+  });
+  select(sel);
+  setInterval(frame, 100);   // repaint 10x a second; keeps running when the tab is in the background
+  setInterval(saveCache, 5000);
+}
+start();
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+# /etc/logrotate.d/crypto-bot
+/var/log/crypto-bot*.log {
+    weekly
+    rotate 8
+    compress
+    missingok
+    copytruncate
+}
