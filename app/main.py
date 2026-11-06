@@ -298,7 +298,11 @@ class Bot:
         held = self.store.positions()
         state = risk.RiskState(**(self.store.get("risk") or
                                   {"peak_equity": 0, "day": "", "day_start_equity": 0}))
-        ok, why = risk.can_enter(state, len(held), self.max_names, self.s.kill_switch_path.exists())
+        # The core does not consume the rotation's slots. This counted len(held), so every core
+        # holding silently cost the rotation a slot that the bar-close path and the backtest both
+        # considered free.
+        ok, why = risk.can_enter(state, signals.breakout_slots_used(held), self.max_names,
+                                 self.s.kill_switch_path.exists())
         if ok and reconcile.safe_mode(self.store):
             ok = False
         if not ok or self.approval:
@@ -306,7 +310,7 @@ class Bot:
             return
         equity, _ = self.equity(prices)
         for sym, trigger in sorted(lv["entry"].items(), key=lambda kv: lv["rank"].get(kv[0], 999)):
-            if len(self.store.positions()) >= self.max_names:
+            if signals.breakout_slots_used(self.store.positions()) >= self.max_names:
                 break
             px = prices.get(sym)
             if px is None or sym in held or sym in acted or px <= trigger:
@@ -367,6 +371,8 @@ class Bot:
 
         core_syms = signals.core_symbols(self.flags)
 
+        self.expire_bar_guard(bar_time)
+
         # exits run automatically in every mode
         for sym, p in held.items():
             if sym in stopped:
@@ -411,8 +417,9 @@ class Bot:
         self.store.put("last_signals", list(cands["symbol"]))
         held = self.store.positions()
         # The core is not one of the breakout slots: counting it would silently cost the rotation a
-        # third of its capacity.
-        n_alt = len([s for s in held if s not in core_syms])
+        # third of its capacity. This used to test `s not in core_syms` - symbol membership, which
+        # miscounts a BTCUSDT the BREAKOUT engine owns - and the backtest tested the engine tag.
+        n_alt = signals.breakout_slots_used(held)
         ok, why = risk.can_enter(state, n_alt, self.max_names, self.s.kill_switch_path.exists())
         if ok and reconcile.safe_mode(self.store):
             ok, why = False, "safe mode: the database and the exchange disagree"
@@ -462,8 +469,6 @@ class Bot:
         # consumer of it; the "Next move" page is the other, and on a 4-hour cycle that page would
         # otherwise have nothing to show at all. It is a single key written once per bar.
         self.snapshot_levels(latest, bar_time, set(u["symbols"]), regime)
-        if self.s.live_cycle:
-            self.store.put("acted_this_bar", [])
         self.ratchet_stops(latest, bar_time)
         equity, cash = self.equity(prices)
         self.store.record_equity(str(bar_time), equity, cash)
@@ -585,6 +590,31 @@ class Bot:
                     self.tg.send(f"LIVE CORE BUY {sym} FAILED: {e}")
         return done
 
+    def expire_bar_guard(self, bar_time):
+        """Start the per-bar churn guard fresh. The ONLY place `acted_this_bar` is cleared.
+
+        on_bar_close calls this once, before any decision on the bar. Both decision paths - the
+        bar close and the live tick - then read and append to one list for the rest of the bar.
+
+        It is a method rather than three lines inline because the 5 Nov version of this guard was
+        inert for want of a single owner. The expiry lived inside core_rebalance, and a SECOND
+        reset sat at the end of on_bar_close behind `if self.s.live_cycle`:
+
+            core_rebalance -> acted_this_bar = ['BTCUSDT']   ...   end of bar -> wiped
+
+        `DECISION_TF=live` is what the server runs, so the bar-close path's entry was erased
+        before the live tick could ever read it and the backstop protected nothing in exactly the
+        configuration it was added for. Two resets for one piece of state is the same shape as the
+        bug it was guarding against: two copies of one rule.
+
+        Expiry is by comparing the stored bar, not by clearing on a schedule, because a book whose
+        core is off returns from core_rebalance immediately - so an expiry living in there would
+        never run for the paper books at all.
+        """
+        if self.store.get("acted_bar") != str(bar_time):
+            self.store.put("acted_bar", str(bar_time))
+            self.store.put("acted_this_bar", [])
+
     def core_rebalance(self, latest, bar_time, state, equity):
         """P7: hold each core coin while it is above its own 200-day average. Act, don't wait.
 
@@ -610,23 +640,49 @@ class Bot:
         blocked = (state.killed or self.s.kill_switch_path.exists()
                    or reconcile.safe_mode(self.store))
 
-        on = []
-        for sym in core_syms:
-            if sym not in latest.index:
-                continue
-            d = latest.loc[sym].get("dist_sma200")
-            if d is not None and pd.notna(d) and float(d) > 0 and not blocked \
-                    and universe.tradable_status(sym):
-                on.append(sym)
+        # The predicate comes from signals.core_on(), not from a copy of it written here.
+        #
+        # This used to test `dist_sma200 > 0` inline, which was the same rule until core_dual_ma
+        # shipped and added the 50-day line to core_on() and to core_tick() but not to this copy.
+        # The result was a bar-close path that BOUGHT because price was above the 200-day and a
+        # live path that SOLD because it was below the 50-day, once an hour, for three days:
+        # 203 fills and 118.32 USDT of fees on the demo book between 30 Oct and 1 Nov.
+        #
+        # Three paths decide whether the core is on. They now all call one function, so they
+        # cannot disagree about the rule no matter what is added to it later.
+        on_flags = signals.core_on(latest.assign(symbol=latest.index), self.flags)
+        on = [sym for sym in core_syms
+              if sym in latest.index and bool(on_flags.get(sym, False))
+              and not blocked and universe.tradable_status(sym)]
+
+        # A symbol already traded on this bar is left alone until the next one. The live tick has
+        # had this guard since the core shipped; the bar-close path did not, which is what let the
+        # two engines trade the same coin against each other within one bar. It is a backstop, not
+        # the fix - the shared predicate above is the fix - but a backstop is what stops a future
+        # divergence costing money before anyone notices.
+        #
+        # This only READS the guard. on_bar_close owns the expiry, so that one bar has exactly one
+        # reset and it happens before any decision. See the comment there.
+        acted = set(self.store.get("acted_this_bar") or [])
 
         for sym in core_syms:
+            if sym in acted:
+                continue
             p = held.get(sym)
             if p and sym not in on:
                 why = ("kill switch" if blocked else "core: closed below its 200-day average")
                 log(f"core exit {sym}: {why}")
                 self.exit_position(sym, p, why, bar_time)
+                acted.add(sym)
+                self.store.put("acted_this_bar", sorted(acted))
             elif not p and sym in on:
                 r = latest.loc[sym]
+                # P12 step 4: refuse an entry already stretched far above the line it would exit
+                # on. backtest.run has applied this since the flag shipped and the live bar-close
+                # path did not - the same class of divergence as the dual_ma churn, found by the
+                # path-agreement tests rather than by anyone noticing.
+                if not signals.core_entry_allowed(self.flags, r.get("dist_sma200")):
+                    continue
                 # Equal split across the coins currently above their line. `trend_core` is itself
                 # the cap; settings.max_weight governs the rotation's picks, not this deliberate
                 # allocation. See the matching comment in backtest.run.
@@ -643,10 +699,14 @@ class Bot:
                     self.store.queue_order(bar_time, "BUY", sym, qty, None, reason,
                                            engine="core")
                     log(f"queued core BUY {sym} for the next open: {reason}")
+                    acted.add(sym)
+                    self.store.put("acted_this_bar", sorted(acted))
                     continue
                 try:
                     self.buy(sym, qty, None, reason, bar_time, engine="core")
                     log(f"core BUY {sym}: {reason}")
+                    acted.add(sym)
+                    self.store.put("acted_this_bar", sorted(acted))
                 except Exception as e:
                     log(f"core buy {sym} skipped: {e}")
 
@@ -1109,6 +1169,10 @@ def main(argv=None):
     pt.add_argument("--label", help="name for the experiment record in reports/experiments")
     Flags.add_cli(pt)
     sub.add_parser("reconcile", help="compare the database with the exchange (P0-C)")
+    fr = sub.add_parser("flatten-residue",
+                        help="sell untracked exchange balances blocking safe mode")
+    fr.add_argument("--yes", action="store_true",
+                    help="actually place the sell orders; without it this only reports")
     sub.add_parser("fleet", help="run every account from one engine (one scan, several books)")
     sub.add_parser("telegram", help="connect Telegram: finds your chat id and sends a test message")
     args = ap.parse_args(argv)
@@ -1169,6 +1233,59 @@ def main(argv=None):
             sys.exit("reconciliation could not run; see the log above")
         print(rep.text())
         sys.exit(0 if rep.ok else 1)
+    elif args.cmd == "flatten-residue":
+        # Rounding residue accumulates: every full exit rounds the quantity down to the exchange's
+        # lot step and leaves a crumb behind. 51 core round trips on 30 Oct left 0.000126 BTC and
+        # 0.0020608 ETH. The ETH is stranded under the 5 USDT minimum notional, and reconciliation
+        # now treats a balance that cannot be sold as dust - but the BTC WAS sellable, so it was a
+        # real difference and it blocked every demo entry until a human cleared it.
+        #
+        # Which balances are sellable comes from reconcile's own walk (Report.sellable), not from
+        # a second copy of the rule here. That is the lesson of the core churn.
+        if s.mode == "paper":
+            sys.exit("paper has no exchange, so there is nothing to flatten")
+        bot = Bot(s)
+        rep = reconcile.check(s, bot.broker, bot.store)
+        if not rep.sellable:
+            print(rep.text())
+            print()
+            print("No sellable untracked balance. Nothing to flatten.")
+            sys.exit(0)
+        total = sum(x["value"] or 0 for x in rep.sellable)
+        print(f"{len(rep.sellable)} untracked balance(s) the exchange will accept an order for, "
+              f"worth about {total:,.2f} USDT:")
+        for x in rep.sellable:
+            print(f"  SELL {x['qty']:.8g} {x['asset']}  (about {x['value']:,.2f} USDT)")
+        if not args.yes:
+            print()
+            print(f"This places real sell orders on the {s.mode} account.")
+            print("Re-run with --yes to do it.")
+            sys.exit(0)
+        sold = []
+        for x in rep.sellable:
+            sym = x["asset"] + "USDT"
+            try:
+                qty = bot.broker.filters(sym).round_qty(x["qty"])
+                fill = bot.broker.sell(sym, qty, f"flat{int(time.time())}{x['asset']}")
+                sold.append(f"{qty:.8g} {x['asset']} at {fill.get('price')}")
+                log(f"flattened residue: SELL {qty:.8g} {x['asset']}")
+            except Exception as e:
+                log(f"could not flatten {x['asset']}: {e}")
+        # Re-check rather than assume. Safe mode clears only if the exchange and the database now
+        # agree about EVERYTHING, not merely about the balances this command touched.
+        again = reconcile.check(s, bot.broker, bot.store)
+        print()
+        print(again.text())
+        print()
+        if again.ok:
+            reconcile.clear_safe_mode(bot.store)
+            print("Safe mode cleared. New entries are allowed again.")
+        else:
+            print("Safe mode left in place: something else still disagrees.")
+        if sold:
+            bot.tg.send("Flattened untracked residue: " + "; ".join(sold) + ". "
+                        + ("Safe mode cleared." if again.ok else "Safe mode still active."))
+        sys.exit(0 if again.ok else 1)
     elif args.cmd == "watchdog":
         hb = s.heartbeat_path
         age = time.time() - float(hb.read_text()) if hb.exists() else float("inf")

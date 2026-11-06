@@ -46,6 +46,22 @@ def _rank(panel, score_col):
     return r.to_numpy()
 
 
+class _with_cooldown:
+    """settings, with kill_cooldown_days overridden by run()'s argument.
+
+    run() takes kill_cooldown_days explicitly and the research scripts vary it, so the argument
+    has to win over the .env value without mutating the settings object the caller owns.
+    """
+
+    def __init__(self, settings, days):
+        self._s, self._days = settings, days
+
+    kill_cooldown_days = property(lambda self: self._days)
+
+    def __getattr__(self, name):
+        return getattr(self._s, name)
+
+
 def run(panel, settings, score_col="score", start=None, end=None, kill_cooldown_days=7,
         max_names=None, never_sell_at_loss=False, trail_pct=None, flags=None,
         size_scale_col=None):
@@ -260,11 +276,13 @@ def run(panel, settings, score_col="score", start=None, end=None, kill_cooldown_
         # 3) risk limits
         if state is None:
             state = risk.RiskState(peak_equity=equity, day=day, day_start_equity=equity)
-        if state.killed and (pd.Timestamp(day) - pd.Timestamp(state.killed_day)).days >= kill_cooldown_days:
-            state.killed, state.peak_equity = False, equity
-            log.append({"time": t, "symbol": "", "side": "EVENT", "qty": 0, "price": 0, "fee": 0,
-                        "reason": f"kill re-armed after {kill_cooldown_days}-day pause", "equity": equity})
-        for ev in risk.update_limits(state, equity, day, settings):
+        # The re-arm used to live here and only here, which is why the live book never got it.
+        # risk.update_limits owns it now and emits the same event, so both paths re-arm from one
+        # rule. kill_cooldown_days is passed through settings rather than as an argument.
+        for ev in risk.update_limits(state, equity, day, _with_cooldown(settings, kill_cooldown_days)):
+            if "re-armed" in ev:
+                log.append({"time": t, "symbol": "", "side": "EVENT", "qty": 0, "price": 0,
+                            "fee": 0, "reason": ev, "equity": equity})
             kills += "kill" in ev
             halts += "daily" in ev
             log.append({"time": t, "symbol": "", "side": "EVENT", "qty": 0, "price": 0, "fee": 0,
@@ -359,7 +377,7 @@ def run(panel, settings, score_col="score", start=None, end=None, kill_cooldown_
                 selling.add(s)
         # P7: the core is not one of the breakout slots. Counting it would mean a core holding in
         # BTC silently costs the rotation a third of its capacity.
-        n_alt = sum(1 for s2, p0 in pos.items() if not p0.get("engine") == "core" and s2 not in selling)
+        n_alt = signals.breakout_slots_used(pos, excluding=selling)
         # P12 step 3: fixed capital slices. The breakout engine is sized against its OWN slice of
         # equity rather than the whole book, so the two engines stop competing for one pot of cash.
         # Without this, whichever queues first spends it: a bar where the core enters leaves the

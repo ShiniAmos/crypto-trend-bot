@@ -130,6 +130,32 @@ def core_on(b: pd.DataFrame, flags=None) -> pd.Series:
     return on
 
 
+def breakout_slots_used(positions, excluding=()) -> int:
+    """How many of the rotation's `max_names` slots are occupied.
+
+    The core does not compete for the rotation's slots - it is a persistent allocation, not a
+    candidate - so a core holding must not be counted here. Ownership comes from the position's
+    stored `engine` tag, never from whether the symbol happens to be in the core's list: the
+    breakout engine can and does hold BTCUSDT on its own account, and symbol membership would
+    hand the rotation a free extra slot every time it did.
+
+    This existed in three places with three different answers:
+
+        backtest.run        engine tag, minus the ones being sold this bar   (correct)
+        Bot.on_bar_close    `sym not in core_syms`, i.e. symbol membership   (wrong)
+        Bot.live_tick       len(positions) - counted the core as well        (wrong)
+
+    So with the core holding BTC and ETH and max_names 5, the bar close saw five free slots and
+    the live tick saw three. Nothing had gone wrong with it yet, but it is the shape that cost
+    118 USDT in fees on 30 Oct: one rule, several copies, the live one holding the wrong answer.
+
+    `excluding` is for the backtest, which decides entries in the same pass that queues exits and
+    must not count a position it is about to close.
+    """
+    return sum(1 for sym, p in positions.items()
+               if (p or {}).get("engine", "breakout") != "core" and sym not in excluding)
+
+
 def core_weight(flags, vol_30d=None):
     """P12 step 4: the per-coin core weight, after any volatility cap.
 

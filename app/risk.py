@@ -92,8 +92,32 @@ class RiskState:
 
 
 def update_limits(state: RiskState, equity, day, settings):
-    """Advance the daily and drawdown limits. Returns a list of events to log."""
+    """Advance the daily and drawdown limits. Returns a list of events to log.
+
+    THE RE-ARM IS FIRST, and it is here rather than in the caller.
+
+    backtest.run has re-armed the 8% kill after a 7-day pause since it was written, resuming from
+    a fresh peak. The live path never did: `update_limits` only ever set `killed = True` and
+    nothing in app/ set it back, so the first kill was permanent. That is not a small divergence.
+    The baseline backtest fires this kill **9 times** over the full sample and **4 times** in the
+    held-out period, each time pausing and carrying on - so the published +21.55% and +12.45%
+    describe a book that survives nine kills, while a live book got one. The numbers were
+    unreachable live by construction, whatever the edge.
+
+    It has already cost a book. The demo account's peak was 5,006.59, it closed at 4,603.98 on
+    1 Nov - two USDT past the 8% line, which the 118 USDT of churn fees is what paid for - and it
+    has been unable to open a position since, with a green heartbeat and no alert.
+
+    Re-arming before the day roll and before the peak is raised is what reproduces backtest.run's
+    ordering exactly, so moving the rule in here changes no backtested number.
+    """
     events = []
+    cooldown = getattr(settings, "kill_cooldown_days", 0) or 0
+    if state.killed and cooldown and state.killed_day:
+        import pandas as _pd
+        if (_pd.Timestamp(day) - _pd.Timestamp(state.killed_day)).days >= cooldown:
+            state.killed, state.peak_equity = False, equity
+            events.append(f"kill re-armed after {cooldown}-day pause")
     if day != state.day:
         state.day, state.day_start_equity, state.halted_today = day, equity, False
     state.peak_equity = max(state.peak_equity, equity)

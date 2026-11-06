@@ -71,6 +71,13 @@ class Settings:
     max_weight: float = field(default_factory=lambda: _env("MAX_WEIGHT", 0.30))
     daily_loss_halt: float = field(default_factory=lambda: _env("DAILY_LOSS_HALT", 0.03))
     kill_drawdown: float = field(default_factory=lambda: _env("KILL_DRAWDOWN", 0.08))
+    # How long the drawdown kill pauses before it re-arms. The backtest has always paused 7 days
+    # and then resumed from a fresh peak; the live path had no re-arm at all, so the first kill was
+    # terminal. Every published figure assumes the pause: the baseline fires this kill 9 times over
+    # the full sample and 4 times in the held-out period, so a book that cannot re-arm cannot reach
+    # those numbers no matter what edge it has. 0 disables the re-arm and restores the old
+    # behaviour. See risk.update_limits.
+    kill_cooldown_days: int = field(default_factory=lambda: _env("KILL_COOLDOWN_DAYS", 7))
     fee_rate: float = field(default_factory=lambda: _env("FEE_RATE", 0.001))
     slippage_bps: float = field(default_factory=lambda: _env("SLIPPAGE_BPS", 7.0))
 

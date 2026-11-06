@@ -34,7 +34,7 @@ pip install -r requirements.txt
 python -m app.main backfill          # download candles
 python -m app.main backtest          # run the backtest
 python research/report_panels.py     # both panels side by side
-pytest -q                            # 241 tests
+pytest -q                            # 316 tests
 ```
 
 ## Read this before you take the numbers seriously
@@ -52,9 +52,19 @@ qualifies — lost **−100%**. The cash is what keeps the account alive.
 reports +27% CAGR for the same rules. The survivorship-free figure is +21.55%. Always quote the
 second one.
 
-**It has been run forward on paper and demo for 18 days and lost ~4.8%**, against BTC −6.7% and ETH
-−11.5% over the same window. That is the 4th percentile of backtested 18-day windows: a bad run,
-inside the expected range, and far too short to conclude anything.
+**It has been run forward for 46 days and lost 5.3%**, against BTC −6.3%, ETH −15.4% and SOL
+−19.7% over the same window, holding 3.4% of its capital and sitting fully in cash on 71% of bars.
+Losing less than the market while barely invested is what this design is for, so judge it against
+BTC rather than against zero.
+
+**But the sample says almost nothing, and that is the most important thing on this page.** Thirteen
+distinct trade decisions, three winners. The 95% confidence interval on that win rate is **8.2% to
+50.3%** — it contains both the 30.3% breakeven and the 32.2% the backtest claims. Showing that
+32.2% really beats breakeven at 95% confidence needs **2,248 trades**, which at the observed rate
+of 0.17 trades a day is **35 years**. This strategy cannot generate enough evidence to confirm or
+deny its own edge within a working lifetime. No amount of forward testing fixes that; only a
+higher trade rate would, and the one measurement here of deciding more often says acting sooner
+costs return.
 
 ## What is actually in here
 
@@ -63,10 +73,17 @@ The research is the larger half of the repository.
 - `RESEARCH_LOG.md` — every program run, including **~660 rejected variants**. The rejections are
   the useful part: ML as a ranker, ML as a veto, nine strategy families, five trend-prediction
   approaches, volatility targeting, correlation caps, time stops, faster timeframes.
-- `app/` — the engine. Backtest and live share every predicate, so the two cannot drift apart.
+- `app/` — the engine. Backtest and live are *meant* to share every predicate. They did not: on
+  30 Oct 2026 a flag reached two of the three code paths that decide whether the trend core is on,
+  the bar close bought on one rule while the live tick sold on another, and it cost 203 fills and
+  118 USDT of fees before anyone noticed. A 6 Nov audit found the same shape in the slot count and
+  found that the 8% drawdown kill re-armed in the backtest and never did live — so the published
+  figures described a book surviving dozens of kills while a live book died on its first. Both are
+  fixed, both have path-agreement tests, and the lesson is in the code: one predicate, one place.
 - `research/` — the measurement tools: survivorship-free panel builder, the ship rule, placebo
   nulls, cost stress, per-engine P&L attribution.
-- `tests/` — 241 tests. Several exist because a bug reached live money first.
+- `tests/` — 316 tests. Several exist because a bug reached live money first, and each of those
+  names the incident, the date and the cost in its docstring.
 
 **The ship rule**, applied throughout: a change ships only if CAGR, Sharpe *and* max drawdown are
 no worse on the standard panel **and** the survivorship-free panel, with the held-out period not

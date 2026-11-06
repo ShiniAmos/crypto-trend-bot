@@ -1,3 +1,8 @@
 # crontab -e (as user bot). The loop already rebuilds the universe and appends history daily;
 # the watchdog is separate so it still fires when the loop itself is dead.
 */30 * * * * cd /opt/bot && venv/bin/python -m app.main watchdog >> /var/log/crypto-bot-watchdog.log 2>&1
+
+# Daily snapshot of the three books, verified on write, 90 kept (~50 MB).
+# Until 5 Nov 2026 the entire forward-test record existed only as the live files on this one VM.
+# Non-zero exit on failure so cron mails it: a backup that fails quietly is mistaken for one.
+17 2 * * * cd /opt/bot && venv/bin/python deploy/backup_books.py --keep 90 >> /var/log/crypto-bot-backup.log 2>&1

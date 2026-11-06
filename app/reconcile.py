@@ -13,10 +13,6 @@ from .universe import STABLES
 
 SAFE_MODE_KEY = "safe_mode"
 DUST = 1e-8
-# An untracked balance worth less than this is dust, not a lost trade. It matches portfolio.DUST_USDT
-# and, more importantly, sits below Binance's 5 USDT minimum order: such a balance cannot be sold,
-# so a safe mode raised over it would never clear and would block the account permanently.
-DUST_USDT = 1.0
 
 
 @dataclass
@@ -26,6 +22,11 @@ class Report:
     differences: list = field(default_factory=list)
     notes: list = field(default_factory=list)      # observed, deliberately not a failure
     checked: dict = field(default_factory=dict)
+    # The untracked balances the exchange would actually accept an order for, recorded by the
+    # same walk that decides they are differences. `flatten-residue` consumes this rather than
+    # asking the sellability question a second time: one rule, one place, which is the lesson of
+    # the core churn.
+    sellable: list = field(default_factory=list)   # [{"asset", "qty", "value"}]
 
     def text(self):
         if self.ok:
@@ -37,6 +38,48 @@ class Report:
         lines += [f"  - {d}" for d in self.differences]
         lines.append("Inspect with: python -m app.main reconcile")
         return "\n".join(lines)
+
+
+def _sellable(brk, asset, qty):
+    """Could this untracked balance actually be sold? That is what separates dust from a lost trade.
+
+    The question is not "is it worth much" but "can it leave the account". A balance below the
+    exchange's lot step or minimum notional is stranded: no order for it will ever be accepted, so
+    a safe mode raised over it can never clear by itself and blocks every entry forever.
+
+    That is not hypothetical, it has happened twice:
+
+        12 Oct 2026   0.0877 ADA, 0.02 USDT   blocked the demo book for days
+        05 Nov 2026   0.0020608 ETH, 5.00 USDT   blocked it again
+
+    and a flat one-dollar dust line cannot tell the second case from the real thing. Rounded down
+    to ETH's 0.0001 lot step that balance is 4.85 USDT, under the 5 USDT minimum, and just as
+    stranded as the ADA was - while 10.15 USDT of BTC sitting next to it WAS sellable and did
+    deserve to block. Value does not decide it; the exchange's filters do.
+
+    So this asks the exchange's own filters - the same SymbolFilters.check() every order goes
+    through. One predicate, asked by everyone who needs the answer, which is the lesson of the
+    core churn of 30 Oct: a rule copied into a second place is a rule that will disagree with
+    itself eventually.
+
+    Returns (sellable, value_usdt, reason):
+        False  stranded, and therefore dust whatever it is worth
+        True   a real discrepancy, and one that can be acted on
+        None   undecidable (no USDT pair, or the exchange could not be reached), treated as a real
+               difference: guessing in the bot's own favour is how a lost trade goes unnoticed.
+    """
+    symbol = asset + "USDT"
+    try:
+        from . import data as _data
+        price = _data.price(symbol)
+        value = qty * price
+    except Exception:
+        return None, None, "no USDT price is available for it"
+    try:
+        _q, why = brk.filters(symbol).check(qty, price)
+    except Exception:
+        return None, value, "the exchange filters could not be read"
+    return (False, value, why) if why else (True, value, "")
 
 
 def _qty_tolerance(filters, qty):
@@ -82,26 +125,21 @@ def check(settings, brk, store) -> Report:
         # for fees, so none of those are evidence that the database has lost track of a trade.
         if asset in STABLES or asset == "BNB" or qty <= DUST or asset in tracked:
             continue
-        # Value it at the real price when there is a pair for it, rather than guessing. An
-        # earlier version multiplied the quantity by the minimum order size, which is meaningless.
-        value = None
-        try:
-            from . import data as _data
-            value = qty * _data.price(asset + "USDT")
-            worth = f" (about {value:,.2f} USDT)"
-        except Exception:
-            worth = ""
-        # Dust is not a lost trade, and treating it as one is worse than useless: on 12 Oct the
-        # demo book was blocked from every entry for days by 0.0877 ADA worth two cents, left
-        # behind when Binance took its fee in the asset bought. Such a balance can never be sold -
-        # it is below the 5 USDT minimum order - so safe mode over it never clears by itself and
-        # blocks the account forever. Below the dust line it is reported and ignored.
-        if value is not None and value < DUST_USDT:
-            rep.notes.append(f"{asset}: {qty:.8g} of untracked dust{worth}, ignored")
+        # Dust is not a lost trade, and treating it as one is worse than useless - it bricks the
+        # account. What makes a balance dust is that it cannot be sold, not that it is small, so
+        # the exchange's own order filters decide it rather than a dollar figure. See _sellable().
+        sellable, value, why = _sellable(brk, asset, qty)
+        worth = f" (about {value:,.2f} USDT)" if value is not None else ""
+        if sellable is False:
+            rep.notes.append(
+                f"{asset}: {qty:.8g} of untracked dust{worth} cannot be sold ({why}), ignored")
             continue
         rep.ok = False
+        tail = " and is large enough to sell" if sellable else f" ({why})"
         rep.differences.append(
-            f"{asset}: exchange holds {qty:.8g} that the database does not know about{worth}")
+            f"{asset}: exchange holds {qty:.8g} that the database does not know about{worth}{tail}")
+        if sellable:
+            rep.sellable.append({"asset": asset, "qty": qty, "value": value})
 
     known_cids = {s["client_order_id"] for s in store.stops().values()}
     for o in open_orders:
