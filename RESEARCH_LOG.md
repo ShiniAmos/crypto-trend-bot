@@ -1910,3 +1910,379 @@ in cash, and the price is the drawdown.
 The idea that idleness is the defect. It is not; it is the mechanism. Any future proposal to
 "trade more" now has to explain why it will not land where `always_rotate` and `trend_no_cash` did,
 and those two are not marginal failures - they are total losses of capital.
+
+---
+
+## P18 - does the breakout rotation earn its keep? (7 Nov 2026)
+
+Every one of the ~660 variants above kept both engines. Nothing had ever asked whether the rotation
+should exist at all. P13 made the question obvious and nobody asked it: on the held-out pit sample
+the core made 60.3% of the profit from a twelfth of the trades, with the shallower drawdown of the
+two, while the rotation is where every defect in this project has lived - three decision paths, the
+Donchian levels, the ranking, four filters, the slot count, the 30 Oct churn.
+
+Arms, built from existing flags so no shipped code moved. `core only` is the shipped configuration
+with `capital_slices` on and `slice_max_names=0`, which caps the rotation's slots at zero while the
+core sleeve is sized from `trend_core` and `core_weight()` and is untouched. `rotation only` is
+`trend_core=0`. (`max_names=0` does not work for this: `max_names = max_names or settings.max_names`
+sends 0 back to the configured value.)
+
+| panel | arm | CAGR | Sharpe | maxDD | Calmar | expo | trades |
+|---|---|---|---|---|---|---|---|
+| **standard** full | shipped | +27.95% | 1.1590 | -26.50% | 1.055 | 19.4% | 730 |
+| | core only | +13.93% | 1.0085 | -17.74% | 0.785 | 13.6% | 210 |
+| | rotation only | +23.22% | **1.2603** | -17.85% | **1.301** | 12.4% | 550 |
+| **standard** held-out | shipped | +22.70% | 1.0416 | -26.50% | 0.857 | 21.3% | 417 |
+| | core only | +9.62% | 0.9460 | **-11.13%** | 0.865 | 13.4% | 109 |
+| | rotation only | +17.26% | 1.0502 | -15.81% | 1.092 | 13.9% | 320 |
+| **pit** full | shipped | +22.15% | 1.0353 | -23.44% | 0.945 | 18.0% | 867 |
+| | core only | +13.91% | 1.0076 | -17.74% | 0.784 | 13.7% | 210 |
+| | rotation only | +14.63% | 0.9954 | -17.61% | 0.831 | 8.4% | 718 |
+| **pit held-out 2022-26** | shipped | +11.96% | 0.6911 | -23.44% | 0.510 | 19.1% | 469 |
+| | **core only** | **+9.62%** | **0.9436** | **-11.13%** | **0.864** | 13.6% | **109** |
+| | rotation only | +5.81% | 0.4914 | -14.75% | 0.394 | 8.3% | 391 |
+| **pit 2x costs** full | shipped | +18.42% | 0.8832 | -28.01% | 0.658 | 18.1% | 871 |
+| | core only | +10.98% | 0.8301 | -20.90% | 0.525 | 13.4% | 208 |
+| | rotation only | +12.15% | 0.8498 | -20.84% | 0.583 | 8.4% | 714 |
+
+### The ship rule says keep it: **REJECT** removal
+
+Applied in the direction of deleting the rotation, `core only` fails every cell on CAGR and three
+of four on Sharpe. The two engines are near-additive in return and not in drawdown - pit full, the
+core alone makes 13.91% and the rotation alone 14.63%, together 22.15%, while each alone draws down
+about -17.6% and together -23.44%. They are complementary, not redundant. The hypothesis that the
+rotation is dead weight is wrong and is now measured as wrong.
+
+### But the rotation's contribution shrinks as the measurement gets more honest
+
+| cell | of the return core-only keeps | of the drawdown it takes |
+|---|---|---|
+| standard, full | 50% | 67% |
+| standard, held-out | 42% | 42% |
+| pit, full | 63% | 76% |
+| **pit, held-out** | **80%** | **47%** |
+
+Read down that column. The more survivorship bias is removed and the more the sample is out of
+sample, the less the rotation contributes - 50% to 80% of the return reachable without it. The most
+honest cell in this project is the one where the rotation matters least, and that gradient is the
+signature of an in-sample effect, not of an edge.
+
+On that cell `core only` is the better book by every risk measure there is: **Sharpe 0.6911 ->
+0.9436, maxDD -23.44% -> -11.13%, Calmar 0.510 -> 0.864**, for 80% of the return from 23% of the
+trades. The pure rotation on the same cell is +5.81% at Sharpe 0.4914, which is close to nothing.
+
+### What this does and does not license
+
+It does not license deleting the rotation: the ship rule exists so that a result this suggestive
+cannot be acted on from one run, and the full-sample cells disagree with the held-out one.
+
+What it does say is that the ship rule is answering "strictly better" when the live question is
+"worth it". Half the drawdown for 80% of the return, with the three-path rotation machinery gone
+along with every class of bug this project has shipped, is a trade worth putting in front of
+whoever owns the money - particularly at the stated real size of ~100 USD, where a -23% fall is
+the difference between sitting through it and stopping.
+
+**The sample cost is the honest objection.** 109 held-out trades against 469. The forward test is
+already unable to distinguish a 32.2% precision from a 30.3% breakeven inside 35 years at the
+current rate, and core-only makes that four times worse. Against that: the sample problem is
+unsolvable either way at this trade rate, so trading an unmeasurable edge for a measurable halving
+of drawdown is not obviously the wrong way round.
+
+Next, and not done here: core-only with the universe widened to 30 names, which is the one change
+that adds sample instead of removing it, and which also fixes the live panel being half the width
+the rank thresholds were calibrated on.
+
+    python research/core_only.py
+
+---
+
+## P19 - the rotation's edge is concentrated in the biased panel (7 Nov 2026)
+
+P18 found core-only better on every risk measure on the held-out pit sample and rejected removing
+the rotation because CAGR failed. This attacks that result properly, then follows where it leads.
+
+### Step 1 - is the drawdown advantage an episode or a property?
+
+This log's own warning says to check: *"the worst drawdown in nine years falls after 2022, so
+standard and held-out max drawdown are the same episode for nearly every variant."* Here they are
+not.
+
+| arm | worst | peak -> trough |
+|---|---|---|
+| shipped (both engines) | -23.44% | Mar 2024 -> Oct 2024 |
+| core only | -11.13% | Dec 2024 -> Apr 2025 |
+
+178 days apart, and **in each arm's worst window the other arm did better**: core-only fell -8.93%
+during shipped's worst fall, shipped fell -12.24% during core-only's.
+
+| year | shipped CAGR | core CAGR | shipped Sharpe | core Sharpe | shipped maxDD | core maxDD |
+|---|---|---|---|---|---|---|
+| 2022 | -1.05% | -1.05% | -1.630 | -1.630 | -1.05% | -1.05% |
+| 2023 | +17.97% | **+21.65%** | 0.682 | **1.482** | -18.29% | **-5.32%** |
+| 2024 | **+18.45%** | +11.04% | 0.695 | **0.729** | -23.44% | **-10.02%** |
+| 2025 | +3.40% | **+5.46%** | 0.169 | **0.575** | -12.50% | **-5.87%** |
+| 2026 | **+28.32%** | +13.80% | **1.824** | 1.806 | -6.30% | **-2.42%** |
+
+Core-only has the shallower drawdown in **5 of 5 years**, the better Sharpe in 4 of 5, and 5 falls
+past 5% against 10, worst -11.13% against -23.44%, at a similar median (-8.56% against -7.62%). It
+is not trading one deep hole for many shallow ones. **The drawdown advantage is a property.**
+
+What it costs is CAGR, and only in the strong years: 2024 and 2026. The rotation adds return when
+things go well and drawdown when they do not, which is the definition of leverage - and finding 2
+of P11 already measured what leverage does here: exposure explains CAGR (r=+0.90) and drawdown
+(r=+0.93) nearly equally, with drawdown rising 1.29x faster per unit.
+
+### Step 2 - so buy the exposure through the core instead
+
+If the rotation is the exposure knob rather than a second edge, raising `trend_core` should buy the
+same return more cheaply: one predicate, no stop, no rank, no breakout, a twelfth of the trades.
+
+**pit (survivorship-free), held-out 2022-26** - deltas against the shipped configuration:
+
+| arm | dCAGR | dSharpe | dmaxDD | dCalmar | CAGR/exposure |
+|---|---|---|---|---|---|
+| shipped | - | - | - | - | 0.625 |
+| core only, 0.25 | -2.34% | +0.2526 | +12.31% | +0.354 | 0.710 |
+| **core only, 0.35** | **+0.45%** | **+0.2200** | **+4.38%** | +0.141 | 0.677 |
+| **core only, 0.45** | **+2.55%** | **+0.2024** | **+2.88%** | +0.195 | 0.667 |
+| **core only, 0.60** | **+7.30%** | **+0.2510** | **+2.56%** | +0.412 | 0.699 |
+
+On the honest panel, out of sample, **core-only at trend_core >= 0.35 beats the shipped
+configuration on CAGR, Sharpe AND max drawdown simultaneously** - the whole ship rule, in one cell,
+at every weight tested. It is also the more efficient holder of risk at every weight: better
+return per unit of exposure than the rotation, which is what "the rotation is leverage, bought
+expensively" predicts.
+
+### Step 3 - and yet nothing ships. Where it fails is the point
+
+| cell | 0.35 | 0.45 | 0.60 |
+|---|---|---|---|
+| standard full | CAGR -9.63%, Sharpe -0.1255 | CAGR -2.91%, Sharpe -0.0141 | maxDD -7.01% |
+| standard held-out | CAGR -10.30%, Sharpe -0.1286 | CAGR -8.20%, Sharpe -0.1464 | CAGR -3.44% |
+| pit full | CAGR -3.85% | maxDD -2.97% | maxDD -10.07% |
+| pit held-out | **passes** | **passes** | **passes** |
+
+Every failure is on the **standard panel** or on full-sample pit. Not one is on the held-out
+survivorship-free cell. The rotation's advantage is concentrated in the 19-coin pinned panel -
+the one this project's own README describes as follows:
+
+> **The standard backtest lies and is included anyway.** Applying today's coin list to all of
+> history reports +27% CAGR for the same rules. The survivorship-free figure is +21.55%. Always
+> quote the second one.
+
+A panel containing only coins that survived to today will of course flatter a strategy that buys
+whichever altcoin is strongest this week, because the ones that broke out and then died are
+missing from it. That is precisely the bias the pit panel exists to remove, and when it is removed
+the rotation stops being worth its drawdown.
+
+### What this establishes, and what it does not
+
+**Establishes:** the rotation is not a second edge independent of the core. It is exposure, and on
+survivorship-free out-of-sample data the core buys the same exposure with less drawdown and a
+better Sharpe. Its measured value depends on the panel the project already distrusts.
+
+**Does not establish that anything should ship.** One run. P11 quantified that information-free
+placebo cuts pass this same ship rule 7.5% to 22% of the time, and no placebo null or cost stress
+has been run against `core only, trend_core=0.45`. Required before acting:
+
+  - placebo null, random-coin and random-time, on the winning arm
+  - cost stress at 1.5x, 2x and 3x - the core trades a twelfth as often, so this should favour it,
+    and if it does not, that is disqualifying
+  - walk-forward with purge gaps, to check the weight is not fitted to the held-out window
+
+**And it raises a question about the rule rather than the result.** The ship rule requires passing
+a panel this project says lies. A change whose entire purpose is to reduce dependence on
+survivorship would be expected to fail that gate, and would be rejected for doing the right thing.
+That is worth settling before the next ten variants are judged by it.
+
+    python research/core_only.py
+    python research/core_only_robustness.py
+    python research/core_instead_of_rotation.py
+
+---
+
+## P20 - the gate P19 demanded: 0.45 was fitted, and the placebo says more than that (18 Nov 2026)
+
+P19 found core-only at `trend_core=0.45` beating the shipped configuration on CAGR, Sharpe and
+drawdown at once on the held-out pit sample, and refused to act on it until it had been attacked.
+Three gates, each able to kill it alone.
+
+### Gate 1 - placebo nulls: the headline number in this whole log
+
+`backtest.random_baselines`, 500 draws, unchanged - the same test every shipped change was judged
+by.
+
+| arm | period | avg trade | random coin | p_coin | random time | p_time |
+|---|---|---|---|---|---|---|
+| shipped | full | +2.63% | +0.37% | **0.000** | +0.81% | **0.000** |
+| shipped | **held-out** | +0.41% | -0.35% | **0.086** | +0.46% | **0.512** |
+| core only 0.45 | full | +3.60% | +1.16% | 0.040 | +1.81% | 0.052 |
+| core only 0.45 | **held-out** | +1.62% | -0.80% | **0.064** | +1.64% | **0.496** |
+
+Read the held-out rows, for **both** arms, and read `p_time` first.
+
+**p_time is 0.496 and 0.512.** The same coin, held for the same number of bars, entered at a
+RANDOM risk-on moment, does as well as the strategy's own entry. Out of sample, the entry timing
+carries no information at all - not for the rotation, not for the core. A coin flip.
+
+**p_coin is 0.064 and 0.086.** Neither arm clears 0.05. The coin selection is not significant
+either, for either engine.
+
+Both are 0.000 on the full sample. The significance lives in the pre-2022 part, which P9 and the
+year attribution already said carries the edge (pit 2019-21 +28.70%/yr against 2023-25 +0.65%/yr).
+This is the third independent route to the same conclusion, and the first one that tests the
+*mechanism* rather than the return.
+
+A note on this gate's own threshold, because it was written too generously. It used compare.py's
+convention - p_coin no worse than `max(baseline, 0.05)` - under which 0.064 against a baseline of
+0.086 "passes". Against an absolute 0.05 both arms fail. The lenient reading is the one that was
+coded; the strict reading is the one that is true.
+
+### Gate 2 - cost stress: PASS, cleanly
+
+The core trades roughly a twelfth as often as the rotation, so its margin should widen with costs.
+It does.
+
+| costs | shipped CAGR | core CAGR | dCAGR | dSharpe |
+|---|---|---|---|---|
+| 1.0x | +11.96% | +14.51% | +2.55% | +0.2024 |
+| 1.5x | +9.89% | +14.80% | **+4.91%** | +0.3035 |
+| 2.0x | +8.66% | +13.25% | +4.58% | +0.2903 |
+| 3.0x | +5.77% | +8.93% | +3.16% | +0.1997 |
+
+At triple costs the shipped book falls to +5.77% while core-only holds +8.93%. **The core is a
+materially cheaper way to hold the same exposure**, and that part of P19 stands.
+
+### Gate 3 - is 0.45 fitted? FAIL
+
+Nothing here fits parameters to data. The one fitted quantity is a human picking 0.45 after seeing
+the held-out result, so the test is whether that weight wins in rolling windows. Sharpe, so a
+bigger weight cannot win on leverage alone.
+
+| window | 0.25 | 0.35 | 0.45 | 0.60 | best |
+|---|---|---|---|---|---|
+| 2022 | -1.629 | -1.629 | -1.630 | -1.630 | 0.25 |
+| 2023 | 1.521 | **1.546** | 1.385 | 1.422 | 0.35 |
+| 2024 | 0.963 | 0.494 | **1.665** | 1.310 | 0.45 |
+| 2025 | 0.550 | **0.553** | 0.145 | 0.218 | 0.35 |
+
+0.45 wins **1 of 4 windows** - 2024, which is the window that dominates the held-out sample. It was
+fitted to one year. 0.35 wins two, and 0.25/0.35 are close in every window while 0.45 and 0.60 are
+erratic. Exactly the selection effect this gate was built to catch.
+
+### What survives
+
+- **Dead:** "core-only at trend_core=0.45 beats the shipped configuration." Fitted to 2024.
+- **Alive:** "the core holds exposure more cheaply than the rotation." Survived cost stress at
+  1.5x, 2x and 3x, and the margin widens.
+- **The finding that matters more than either:** out of sample, neither engine's entry timing beats
+  random timing (p = 0.496 and 0.512) and neither coin selection clears 0.05 (0.064 and 0.086).
+  Whatever this bot is doing after 2022, it is not selecting coins or moments better than chance.
+
+### What that means for the project
+
+The risk control is a separate claim and it is not touched by any of this. Live, over a 20% BTC
+fall, the paper book lost 5.91% at 3.3% average exposure with a -7.01% worst drawdown. Being
+mostly in cash during a bear market is doing what it says, is verifiable in weeks rather than
+decades, and does not depend on the entry timing having an edge.
+
+The honest division is now sharp, and it is not a matter of opinion any more:
+
+| claim | status |
+|---|---|
+| it loses much less than crypto in a fall | measured, holding, verifiable in weeks |
+| it picks coins better than chance, post-2022 | **p = 0.064, not established** |
+| it picks moments better than chance, post-2022 | **p = 0.496, a coin flip** |
+
+Any future variant should be judged against the second and third rows, not the first. Nine years of
+full-sample p = 0.000 is the 2019-21 era speaking, and this engine will not trade that era again.
+
+    python research/core_only_gate.py
+
+---
+
+## P21 - execution quality: what the forward test CAN measure (18 Nov 2026)
+
+P20 established that the returns question is unanswerable here - about 2,248 trades to separate a
+32.2% precision from a 30.3% breakeven, roughly 35 years at 0.17 trades a day, and the entry timing
+a coin flip out of sample anyway. Execution is the opposite kind of question: every fill is an
+observation, the demo book holds 212 against a real exchange, and the answers change decisions now.
+
+Only the demo book counts. `PaperBroker` applies `settings.slippage` itself, so measuring slippage
+on paper returns the assumption back.
+
+### The fee model is right
+
+| | |
+|---|---|
+| observations | 212 real exchange commissions |
+| modelled | 0.1000% |
+| realised median | 0.1001% |
+| realised range | 0.1000% to 0.1001% |
+
+Off by 0.05% of itself. The cost assumption every backtest in this log inherits is correct.
+
+One hole remains: a commission charged in BNB is recorded as a zero fee (`app/broker.py`), so a
+book holding BNB would understate its costs. No fill here did, but the path exists.
+
+### Fill price against the price the backtest assumes - split by code path
+
+`backtest.run` fills an order decided on a close at the NEXT BAR'S OPEN. This compares what the
+live book actually paid against the same reference, with the 200 churn fills excluded: they bought
+and sold the same coin inside one bar, so they sit on the open by construction and would drag any
+median to zero, making a broken model look perfect.
+
+| path | n | median | mean | worst |
+|---|---|---|---|---|
+| **bar close, breakout** | 3 | **-30.9 bps** | -25.5 | -5.5 |
+| bar close, core | 2 | -0.1 bps | -0.1 | +0.6 |
+| live tick, core | 2 | -2.6 bps | -2.6 | -2.1 |
+| **live tick, breakout** | 5 | **+113.7 bps** | **+124.1** | **+269.7** |
+
+**On the path the backtest models, the cost model is conservative** - bar-close fills came in at
+-5.5 bps median against a modelled +7.0. The backtest is not flattering itself on execution.
+
+**On the live tick, breakout fills cost +113.7 bps each.** That is not slippage; it is the price
+having already moved before the tick fired. Sixteen times the modelled cost, roughly 2.3% per round
+trip, against an average winning trade of +4.8%. Half the edge, handed over by a configuration this
+log had already rejected on 4 Oct and the server ran until 6 Nov. The core's tick exits are
+unaffected (-2.6 bps), because a 50-day average is not a level that gets jumped.
+
+This is the fourth independent measurement of the same thing, and the most direct: the 4 Oct
+backtest said acting sooner costs 4.1 CAGR points, the 6 Nov entry audit found a +1.20% mean entry
+penalty, P19 found the rotation's value sits in the biased panel, and now the fills themselves put
+a price on it. `DECISION_TF=4h` since 6 Nov, so the number should stop growing.
+
+### A methodological trap, recorded because it nearly produced the opposite conclusion
+
+Scored against 4h candles this same data reported the cost model as **OPTIMISTIC by +40 bps**.
+Every demo fill predates the 6 Nov switch, when the server ran `LEVEL_TF=1h`, so a fill at 23:06
+was being compared with the 20:00 bar's open - three hours of price drift counted as execution
+cost. On the 1h reference that was actually in force, the same fills show the model conservative by
+5 bps.
+
+**The reference has to match the cadence that was running.** The script now defaults to 1h and says
+so; use 4h for fills after 6 Nov 2026.
+
+### Lot-step rounding is immaterial
+
+| symbol | round trips | stranded | share of everything bought |
+|---|---|---|---|
+| BTCUSDT | 51 | 0.000126 | 0.0328% |
+| ETHUSDT | 51 | 0.0020608 | 0.0156% |
+| ADAUSDT | 1 | 0.0877 | 0.0067% |
+
+Three basis points per round trip at worst, an order of magnitude under the fee. It matters only in
+that it cannot be sold once it falls under the exchange's minimum notional, which is what bricked
+the demo book twice - a safe-mode problem, not a cost problem, and fixed on 5 Nov.
+
+### What this settles
+
+Settles: the fee model, the rounding loss, which code path fired, and the gap between live fills
+and the backtest's reference - the last of which is the only quantity that was previously assumed
+rather than measured.
+
+Does not settle whether the strategy makes money, and no amount of execution measurement will.
+
+    python research/execution_quality.py                 # 1h reference, the demo book
+    python research/execution_quality.py --interval 4h   # for fills after 6 Nov 2026

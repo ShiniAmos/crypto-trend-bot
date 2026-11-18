@@ -92,6 +92,21 @@ filters and two structural changes passed.
 
 Some findings worth more than the bot:
 
+- **Out of sample, the entry timing is a coin flip.** Against the repository's own placebo null,
+  the same coin held for the same number of bars entered at a *random* risk-on moment does as well
+  as the strategy's own entry: **p = 0.496** for the trend core and **0.512** for the breakout
+  rotation on 2022–2026 data. Coin selection does not clear 0.05 either (0.064 and 0.086). Both
+  are p = 0.000 on the full sample, so the significance lives in 2019–2021 — the era the year
+  attribution already identified, and one this engine will not trade again. Whatever this bot does
+  after 2022, it is not picking coins or moments better than chance.
+- **What it does provably do is lose less in a fall.** Run forward through a 20% BTC decline it lost
+  5.9%, at 3.4% average exposure, with a −7.0% worst drawdown. That claim verifies in weeks rather
+  than decades and does not require the entry timing to have an edge, which is why it is the one
+  worth judging this on.
+- Deciding inside the bar instead of on the 4-hour close cost **+113.7 bps per breakout fill**,
+  measured on real exchange fills — sixteen times the modelled slippage, about 2.3% per round trip
+  against an average winning trade of +4.8%. The cost model itself is accurate: 212 real
+  commissions against a modelled 0.10% came in at a median 0.1001%.
 - Returns are unpredictable (AUC 0.47–0.52) but **losses are** (AUC 0.78) — and the trades a model
   correctly flags as dangerous are the profitable ones, so it cannot be traded.
 - Win rate carries almost no information about profit: across 225 configurations the correlation
