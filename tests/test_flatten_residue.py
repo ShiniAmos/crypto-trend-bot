@@ -128,3 +128,43 @@ def test_nothing_to_do_when_the_books_agree(store):
     """With no untracked balance the command must find nothing to sell."""
     rep = reconcile.check(DEMO, Exchange({"USDT": 4603.0}), store)
     assert rep.ok and rep.sellable == []
+
+
+def test_accepting_residue_clears_the_block_without_an_order(store):
+    """The route that does not place a trade.
+
+    The ETH half of the 5 Nov residue could never be sold - 4.85 USDT after rounding, under the
+    5 USDT minimum - so selling is not always available, and when it is not, accepting is the only
+    way a blocked book ever trades again.
+    """
+    brk = Exchange({"USDT": 4603.0, "BTC": 0.000126})
+    rep = reconcile.check(DEMO, brk, store)
+    assert not rep.ok
+
+    reconcile.accept_residue(store, [{"asset": "BTC", "qty": 0.000126}])
+    again = reconcile.check(DEMO, brk, store)
+    assert again.ok, f"accepting the residue did not clear the block: {again.differences}"
+    assert any("accepted" in n for n in again.notes), "the acceptance was applied silently"
+    assert brk.sells == [], "accepting must not place an order"
+
+
+def test_acceptance_subtracts_rather_than_whitelisting(store):
+    """A genuine discrepancy ON TOP of accepted residue must still block.
+
+    This is what separates accepting from hiding. If acceptance whitelisted the asset, a real lost
+    trade in the same coin would go unreported for ever.
+    """
+    reconcile.accept_residue(store, [{"asset": "BTC", "qty": 0.000126}])
+    rep = reconcile.check(DEMO, Exchange({"USDT": 4603.0, "BTC": 0.5 + 0.000126}), store)
+    assert not rep.ok, "a 0.5 BTC phantom was hidden by a 0.000126 BTC acceptance"
+    assert any("BTC" in d for d in rep.differences)
+    assert any("0.5" in d for d in rep.differences), (
+        "the difference should report the 0.5 on top, not the gross balance")
+
+
+def test_accepting_twice_is_idempotent(store):
+    """Running it again must not double the accepted quantity."""
+    reconcile.accept_residue(store, [{"asset": "BTC", "qty": 0.000126}])
+    second = reconcile.accept_residue(store, [{"asset": "BTC", "qty": 0.000126}])
+    assert second == {"BTC": 0.000126}
+    assert reconcile.residue_baseline(store) == {"BTC": 0.000126}

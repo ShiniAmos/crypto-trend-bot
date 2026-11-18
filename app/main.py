@@ -1173,6 +1173,9 @@ def main(argv=None):
                         help="sell untracked exchange balances blocking safe mode")
     fr.add_argument("--yes", action="store_true",
                     help="actually place the sell orders; without it this only reports")
+    fr.add_argument("--adopt", action="store_true",
+                    help="accept the residue as known instead of selling it: no order is placed, "
+                         "reconciliation subtracts it and safe mode clears")
     sub.add_parser("fleet", help="run every account from one engine (one scan, several books)")
     sub.add_parser("telegram", help="connect Telegram: finds your chat id and sends a test message")
     args = ap.parse_args(argv)
@@ -1256,10 +1259,38 @@ def main(argv=None):
               f"worth about {total:,.2f} USDT:")
         for x in rep.sellable:
             print(f"  SELL {x['qty']:.8g} {x['asset']}  (about {x['value']:,.2f} USDT)")
+        if args.adopt:
+            # Accept the residue instead of selling it. This is the route that does not place an
+            # order, and it is the only route for a balance under the exchange's minimum notional.
+            # check() subtracts what is accepted and judges the remainder, so this cannot hide a
+            # later discrepancy - but it does mean equity understates the account by the value
+            # accepted, which is why that figure is printed and logged rather than just applied.
+            items = [{"asset": x["asset"], "qty": x["qty"]} for x in rep.sellable]
+            # Dust reconcile already ignores is left alone; only what BLOCKS is accepted.
+            kept = reconcile.accept_residue(bot.store, items)
+            print()
+            print(f"accepted as known residue (equity now understates the account by about "
+                  f"{total:,.2f} USDT):")
+            for a, q in sorted(kept.items()):
+                print(f"  {a}: {q:.8g}")
+            again = reconcile.check(s, bot.broker, bot.store)
+            print()
+            print(again.text())
+            print()
+            if again.ok:
+                reconcile.clear_safe_mode(bot.store)
+                print("Safe mode cleared. New entries are allowed again.")
+                bot.tg.send("Accepted untracked residue (" + ", ".join(
+                    f"{a} {q:.8g}" for a, q in sorted(kept.items()))
+                    + f", about {total:,.2f} USDT). Safe mode cleared, entries allowed again.")
+            else:
+                print("Safe mode left in place: something else still disagrees.")
+            sys.exit(0 if again.ok else 1)
         if not args.yes:
             print()
             print(f"This places real sell orders on the {s.mode} account.")
-            print("Re-run with --yes to do it.")
+            print("Re-run with --yes to do it, or --adopt to accept the residue as")
+            print("known without placing any order (equity then understates by that much).")
             sys.exit(0)
         sold = []
         for x in rep.sellable:

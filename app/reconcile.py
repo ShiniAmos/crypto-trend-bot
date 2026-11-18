@@ -12,6 +12,10 @@ from datetime import datetime, timezone
 from .universe import STABLES
 
 SAFE_MODE_KEY = "safe_mode"
+# Untracked balances the operator has accepted as known residue, {asset: qty}. check() SUBTRACTS
+# these rather than ignoring the asset, so a genuine discrepancy on top of accepted residue still
+# fails: baseline 0.000126 BTC and 0.5 BTC appearing still reports 0.499874 BTC.
+BASELINE_KEY = "reconcile_baseline"
 DUST = 1e-8
 
 
@@ -120,11 +124,22 @@ def check(settings, brk, store) -> Report:
                 f"(short by {p['qty'] - held:.8g})")
 
     tracked = {s[:-4] for s in positions}
+    baseline = store.get(BASELINE_KEY) or {}
     for asset, qty in balances.items():
         # Cash is not a position. A demo account is funded in several stablecoins, and BNB is kept
         # for fees, so none of those are evidence that the database has lost track of a trade.
         if asset in STABLES or asset == "BNB" or qty <= DUST or asset in tracked:
             continue
+        # Accepted residue is subtracted, not whitelisted. The remainder is judged normally, so
+        # anything NEW on top of an accepted balance still blocks.
+        accepted = float(baseline.get(asset, 0.0) or 0.0)
+        if accepted:
+            qty = qty - accepted
+            if qty <= DUST:
+                rep.notes.append(
+                    f"{asset}: {accepted:.8g} of accepted residue, ignored by agreement")
+                continue
+            rep.notes.append(f"{asset}: {accepted:.8g} accepted; judging the {qty:.8g} on top")
         # Dust is not a lost trade, and treating it as one is worse than useless - it bricks the
         # account. What makes a balance dust is that it cannot be sold, not that it is small, so
         # the exchange's own order filters decide it rather than a dollar figure. See _sellable().
@@ -174,3 +189,27 @@ def safe_mode(store):
 
 def clear_safe_mode(store):
     store.put(SAFE_MODE_KEY, None)
+
+
+def accept_residue(store, items):
+    """Record untracked balances as known residue, so they stop blocking entries.
+
+    This is the alternative to selling them, and it exists because the residue that bricked the
+    demo book could not always be sold: 0.0020608 ETH rounds to 4.85 USDT, under Binance's 5 USDT
+    minimum notional, so no order for it would ever be accepted. Accepting is not a way to hide a
+    lost trade - check() subtracts the accepted quantity and judges the remainder - but it DOES
+    mean the book's equity understates the account by the value of what was accepted, so the
+    amount is recorded rather than merely suppressed.
+
+    `items` is an iterable of {"asset", "qty"}. Existing entries are replaced, not added to, so
+    accepting twice is idempotent rather than cumulative.
+    """
+    current = dict(store.get(BASELINE_KEY) or {})
+    for it in items:
+        current[it["asset"]] = float(it["qty"])
+    store.put(BASELINE_KEY, current)
+    return current
+
+
+def residue_baseline(store):
+    return dict(store.get(BASELINE_KEY) or {})
