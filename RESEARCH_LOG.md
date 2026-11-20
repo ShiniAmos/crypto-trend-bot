@@ -2553,3 +2553,93 @@ engineering decision as well as a research one.
     python research/magnitude_model_pit.py      # try 4: a magnitude model on the real universe
     python research/ranking_anatomy.py          #        where the ranking's skill is
     python research/rank_veto_ship.py           # try 5: the veto, the ship rule, the control
+
+---
+
+## P23 - the shadow rank scorer: forward data for the P22 veto, without trading on it (20 Nov 2026)
+
+P22's rank veto beat twelve random vetoes and failed the ship rule on the survivor panel. What it
+earned was forward data. This builds the instrument that collects it: a separate service that
+scores the coin universe every 4-hour bar and records the result, and never touches a book, an
+order or a setting of the bot.
+
+### The universe had stopped being crypto
+
+The P22 universe - the top 30 USDT pairs by trailing 30-day volume - held **7 tokenized equities
+and 2 dollar-pegged tokens** on 19 Nov 2026 (GOOGLB, NVDAB, SOXLB, MUB, SNDKB, SPCXB, CRCLB; U,
+RWUSD). Binance has listed 104 stock tokens since 11 June 2026, and exchangeInfo carries no
+asset-class field. `app/rankuniverse.py` removes both before ranking:
+
+| class | rule | measured |
+|---|---|---|
+| tokenized stock | base ends in "B" and first listed on or after 2026-06-01 | 113 such names in the archive: the 9 listed before 2026 are all coins (BNB, ARB, CKB, DGB, TRB, PHB, VIB, AMB, MOB), all 104 since are equities and ETFs |
+| pegged | last 30 closed daily bars moved under 0.5% a day | pegged tokens at 0.02%; the quietest coin, TRX, 1.8% |
+
+The first version used weekend volatility (a stock barely moves while its market is shut). Checked
+on 90 days of 2026 data it separated all nine stocks from every coin; run over nine years of rolling
+windows **it flagged BNB and ARB as stocks** at some point. Measured on the wrong window.
+
+Before June 2026 the corrected rule removes only stablecoins - PAX for 581 member-days, UST 101,
+U 97, XUSD 19 - so P22's research universe carried 798 member-days of stablecoins. Small, and now
+gone.
+
+### Re-validated on the corrected universe before anything was exported
+
+`research/train_rank_model.py`, walk-forward, fresh model per fold, after `refresh_pit.py` brought
+the survivorship-free cache to 20 Nov:
+
+| period | IC | quarters positive | bottom third | top third |
+|---|---|---|---|---|
+| development (to 2024) | +0.076 | 20 / 22 (z 9.4) | -0.29% | +0.27% |
+| holdout (2025 to 2026-10-04) | +0.054 | 7 / 8 (z 4.4) | -0.24% | +0.12% |
+| **unseen: 2026-10-04 to 11-20** | **+0.102** | 1 / 1 | **-0.29%** | +0.30% |
+
+The seven unseen weeks are the first data no experiment in this repository had touched, and they
+include a 20% BTC fall. The bottom third kept losing 0.29% a day against the average coin.
+
+### One pipeline, a model as data, and a defect only the parity test could find
+
+`app/rankfeatures.py` is the only code that turns candles into the model's 57 inputs, called by
+training and by the live scorer; the relationship features moved from research/ into
+`app/relfeatures.py`, with `research/dots_features.py` now an alias to that module. The model is
+exported by `app/rankmodel.py` as its trees in JSON and evaluated with numpy alone - the server has
+scikit-learn 1.9, the model was fitted with 1.6 - and the exporter refuses a model it cannot
+reproduce (difference on unseen rows with 30% missing values: 0.0).
+
+The live scorer builds features from a 260-bar tail, training from nine years. Every one of the 57
+inputs agreed to 1e-9 on real candles - and **BTC's predictions still differed, every bar**. BTC's
+beta and correlation to itself are 1 by definition and 1 plus or minus a few 1e-16 as computed, the
+noise depending on how much history the rolling sums ran over, and the trained trees had split at
+**beta 1.000000000000028 and correlation 1.000000000000082** - inside the noise. The model had
+learned to recognise BTC from rounding error. Both are now set to exactly 1.0 for BTC and the model
+retrained; the end-to-end test then recorded the same coins, predictions (to 1e-10) and percentiles
+as the training pipeline across 12 bars of frozen real candles.
+
+On the server, under pandas 3.0 and numpy 2.5 against 2.2 and 2.1 here, the same bar scored
+identically: 30 coins, prediction difference 0.0.
+
+### What runs, and what it records
+
+`crypto-bot-rankshadow.timer` runs `python -m app.rankscore` 15 minutes after every 4-hour close,
+after the fleet's own bar cycle. It reads public market data into `data/rank/`, writes only
+`data/rank/shadow.sqlite`, runs under `MemoryMax=320M` with `OOMScoreAdjust=500` (peak 224 MB on a
+cold start), and backfills up to 12 missed bars. No trading module imports it, and a test says so.
+
+`python -m app.rankreport` answers the two forward questions read-only, recomputing every outcome
+from candles with the model's own label definition (also tested): whether the bottom third keeps
+losing against the average coin - 180 observations a day, meaningful within weeks - and whether the
+bot's actual breakout entries in the bottom third do worse than the rest, which accumulates only as
+fast as the bot trades and is the question that decides whether the veto ever ships.
+
+### What would change the decision
+
+| forward result after about three months | means |
+|---|---|
+| bottom third near -0.25% a day, z above 2 on non-overlapping days | the model holds up; the veto question is then the bot's own entries |
+| bottom third near zero | the skill was in the past; the veto is abandoned |
+| bot entries in the bottom third losing, the rest not | the case for re-running the ship rule, and for the question P19 raised about the survivor panel |
+
+    python research/refresh_pit.py           # bring the survivorship-free cache up to date
+    python research/train_rank_model.py      # re-validate and export models/rank_model.json
+    python -m app.rankscore --status         # on the server: what has been recorded
+    python -m app.rankreport                 # on the server: what the record says

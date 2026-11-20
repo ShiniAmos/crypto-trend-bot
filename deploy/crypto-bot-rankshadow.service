@@ -1,0 +1,24 @@
+# Shadow rank scorer: scores the coin universe every 4h bar and records it. LOG ONLY.
+# It never touches a book, an order or a setting of the trading bot, and the fleet does not
+# import it (tests/test_rank_shadow.py asserts that). Remove it with:
+#   sudo systemctl disable --now crypto-bot-rankshadow.timer
+[Unit]
+Description=Crypto bot shadow rank scorer (log only, never trades)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=bot
+Group=bot
+WorkingDirectory=/opt/bot
+ExecStart=/opt/bot/venv/bin/python -m app.rankscore
+# Peak 224 MB on a cold start. The cap means a runaway run is killed inside its own cgroup and
+# can never take the fleet's memory; OOMScoreAdjust makes it the kernel's first choice too.
+MemoryMax=320M
+MemorySwapMax=0
+OOMScoreAdjust=500
+Nice=10
+TimeoutStartSec=900
+StandardOutput=append:/var/log/crypto-bot-rankshadow.log
+StandardError=append:/var/log/crypto-bot-rankshadow.log

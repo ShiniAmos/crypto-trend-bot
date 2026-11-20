@@ -1,0 +1,14 @@
+# 15 minutes after every 4-hour bar closes: after the fleet's own bar cycle (about 40 s past the
+# close), so the two never compete for memory. Persistent catches up a run missed while down; the
+# scorer itself backfills up to 12 missed bars.
+[Unit]
+Description=Shadow rank scorer, 15 minutes after each 4h close
+
+[Timer]
+OnCalendar=*-*-* 00,04,08,12,16,20:15:00 UTC
+Persistent=true
+RandomizedDelaySec=60
+Unit=crypto-bot-rankshadow.service
+
+[Install]
+WantedBy=timers.target

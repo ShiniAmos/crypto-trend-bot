@@ -8,7 +8,6 @@ into the test period.
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import HistGradientBoostingRegressor
 
 from .features import BARS_PER_DAY, FEATURE_COLS
 
@@ -38,6 +37,9 @@ def design(p: pd.DataFrame) -> pd.DataFrame:
 
 def walk_forward(panel, horizon=6, train_days=730, test_days=91, log=print):
     """Return panel with out-of-sample `ml_score` (NaN where no model had been trained yet)."""
+    # Imported here, not at module level: `design` is also used by the live rank scorer, which
+    # runs on a 1 GB server with numpy alone and must not pull scikit-learn in to build a matrix.
+    from sklearn.ensemble import HistGradientBoostingRegressor
     p = add_target(panel[panel["eligible"]].copy(), horizon)
     X = design(p)
     y = p["target"]
