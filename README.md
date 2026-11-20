@@ -34,7 +34,7 @@ pip install -r requirements.txt
 python -m app.main backfill          # download candles
 python -m app.main backtest          # run the backtest
 python research/report_panels.py     # both panels side by side
-pytest -q                            # 316 tests
+pytest -q                            # 327 tests
 ```
 
 ## Read this before you take the numbers seriously
@@ -82,7 +82,7 @@ The research is the larger half of the repository.
   fixed, both have path-agreement tests, and the lesson is in the code: one predicate, one place.
 - `research/` — the measurement tools: survivorship-free panel builder, the ship rule, placebo
   nulls, cost stress, per-engine P&L attribution.
-- `tests/` — 316 tests. Several exist because a bug reached live money first, and each of those
+- `tests/` — 327 tests. Several exist because a bug reached live money first, and each of those
   names the incident, the date and the cost in its docstring.
 
 **The ship rule**, applied throughout: a change ships only if CAGR, Sharpe *and* max drawdown are
@@ -92,6 +92,23 @@ filters and two structural changes passed.
 
 Some findings worth more than the bot:
 
+- **A model can tell which coins are about to do badly. It cannot tell which will do well.**
+  Gradient boosting on relationship features (BTC lead-lag, market breadth, rolling beta, bar
+  microstructure), trained walk-forward on the survivorship-free universe, ranks coins by their
+  next-24-hour return correctly in **29 of 29 quarters** out of sample. All of that skill is at the
+  bottom: the lowest-scored tenth of coins loses 0.68% a day against the average coin in
+  development and 0.87% on the holdout, while the highest-scored tenth has no edge left on the
+  holdout at all. Four different long-only rules built on its top picks were tried and all four
+  failed out of sample. One of them made +80% on 17 coins that are alive today and −70% on the 383
+  that actually traded, having bought LUNA six times on the way to zero — the cleanest
+  demonstration of survivorship bias in this repository.
+- **Used the other way round, it is worth something.** As a veto on the breakout entries the bot
+  already takes — skip a coin the model ranks in its bottom third — it lifts the survivorship-free
+  held-out backtest from +11.96% to **+14.57%** a year, Sharpe 0.69 to **0.88**, with a shallower
+  drawdown. Twelve random vetoes of the same size averaged +9.90%, worse than no veto at all, and
+  none matched it. It still **fails this project's ship rule**, because the 19-coin survivor panel
+  disagrees by under a point, so it has not shipped. A filter whose value is avoiding coins about to
+  do badly is expected to look weakest on a panel assembled from coins that did not.
 - **Out of sample, the entry timing is a coin flip.** Against the repository's own placebo null,
   the same coin held for the same number of bars entered at a *random* risk-on moment does as well
   as the strategy's own entry: **p = 0.496** for the trend core and **0.512** for the breakout

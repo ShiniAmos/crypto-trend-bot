@@ -2286,3 +2286,270 @@ Does not settle whether the strategy makes money, and no amount of execution mea
 
     python research/execution_quality.py                 # 1h reference, the demo book
     python research/execution_quality.py --interval 4h   # for fills after 6 Nov 2026
+
+---
+
+## P22 - a prediction search with the test data protected, and what it found (20-21 Nov 2026)
+
+Brief from the owner: train on past Binance data, predict, try combination after combination until
+something accurate turns up, and keep nothing between one train/test round and the next.
+
+"Try until it works" against a single test set guarantees a winner whether or not anything is
+predictable, so the history was split three ways before anything ran:
+
+| period | span | use |
+|---|---|---|
+| development | first bar to 2024-12-31 | every candidate, as often as wanted, walk-forward inside |
+| holdout | 2025-01-01 to 2026-09-24 | the top development candidates only, once each |
+| pristine | 2026-09-24 to 2026-11-20 | Binance candles downloaded after the research was written |
+
+A fresh model per fold on a rolling 730-day window, a purge gap of horizon+1 bars, the same gap at
+the period boundaries, a shuffled-label null beside every score, and a positive control: P6 showed
+losses are predictable here, so a harness that cannot see "falls more than 10%" is broken.
+`tests/test_prediction_harness.py` holds eight tests on the harness itself, including a spy model
+that confirms training rows stop more than a horizon short of the test window (gap 8 bars with the
+purge, 1 without - the test fails when the purge is removed).
+
+### The first grid found signal everywhere, and three of its best results were artefacts
+
+`train_predict_grid.py` flagged "SIGNAL" on 17 of 20 cells.
+
+1. **"Beats BTC" scored AUC 0.58 with BTC's own rows in the sample.** BTC cannot beat itself, so
+   its label is always 0, and its relative-strength features are exactly 0, which identifies it. A
+   block of free negatives lifts AUC from 0.50 to about 0.56-0.60 on its own. With BTC removed the
+   same cell scores 0.53.
+2. **"Gains more than 10%" scored 0.71 and "falls more than 10%" scored 0.69.** A model that
+   predicts both tails equally well is predicting volatility.
+3. **"Is up" scored 0.53**, about what bull/bear drift alone gives.
+
+AUC rewarded all three, so the yardstick became money: at each bar, the forward return of the
+model's 3 highest-scored coins minus the average coin. That is zero for any model without selection
+skill, and there are tests that it is zero for noise and for a pure volatility predictor.
+
+### Try 1 - the search: one real signal, a fifth of the size it needs to be
+
+`predict_search.py`: 102 candidates (two feature sets x six targets x three horizons x two models,
+plus bull-only and tradable-only subsets). The new feature set adds 26 relationship features -
+BTC lead-lag, market breadth and dispersion, rolling beta, bar microstructure, calendar - proven
+causal by truncation (`dots_features.assert_causal`, and a test that a planted leak trips it).
+
+The positive control scored AUC 0.70-0.75. One return-predicting family survived all three periods:
+**which coins land in the top third of the cross-section over the next 4-hour bar.**
+
+| period | AUC | top-3 pick edge per bar | |
+|---|---|---|---|
+| development | 0.533 | +0.074% | z 6.36 |
+| holdout | 0.529 | +0.052% | z 3.83 |
+| pristine | 0.544 | +0.047% | permutation p = 0.000 |
+
+This contradicts the line in this log that every return model scores AUC 0.47-0.52. At a 4-hour
+horizon, with relationship features, there is a stable cross-sectional signal. It is also a fifth
+of the 0.27% a round trip costs, so by the criteria fixed in advance it is not worth trading.
+
+| horizon | best pick edge | against 0.27% | reliability |
+|---|---|---|---|
+| 4 hours | +0.07% | far below | z 6.4 |
+| 1 day | +0.26% | about breakeven | z 4.7 |
+| 5 days | +0.47% | above | z 2.2, under the luck bar of 3.0 for 90 candidates |
+
+The reliable horizons do not clear costs and the horizon that clears costs is not reliable.
+
+`signal_anatomy.py` (development only): no single feature group carries it, the coin's own last few
+bars matter most; the edge is concentrated - the top pick +0.115% a bar, anything ranked 4th or
+lower nothing, the most confident 1% of predictions +0.37%; it accumulates when held (+0.07% at 4h,
++0.21% at 48h); and 53% of the top-3 changes every bar, so the break-even round trip is 0.14%.
+
+### Try 2 - a confidence rule: the first pass in this project, and it was survivorship
+
+`signal_rule.py`: buy when the score clears a trailing 180-day quantile, hold K bars. Twelve
+combinations scored on development; the code chose the top 1%, held 24 hours.
+
+| 17 surviving coins | trades | net of costs per trade | portfolio | average coin |
+|---|---|---|---|---|
+| development | 1,450 | +0.56% | +28% CAGR | |
+| holdout | 582 | **+0.75%** (z 2.78) | **+80%**, maxDD -18% | +1%, maxDD -56% |
+| pristine | 37 | +1.65% | +3.8% | -32% |
+
+It passed on data it was not chosen on. `signal_rule_pit.py` then ran the same rule, nothing
+re-chosen, on the survivorship-free universe: 383 coins, 93 of them later dead, positions marked on
+full price history and closed at the last traded price when trading stops.
+
+| what became of the coin | trades | net spread per trade |
+|---|---|---|
+| one of today's 17 top coins | 642 | **+0.93%** |
+| alive, not in the 17 | 2,604 | **-0.46%** |
+| later delisted | 802 | +0.06% |
+| all 294 coins traded | 4,048 | **-0.14%** |
+
+Holdout on the real universe: -0.18% a trade (z -0.37), 42.7% winners, portfolio **-70%**.
+
+Same model, same rule, same dates; it makes money only in the coins now known to have become
+today's top coins. The model's most confident calls were crash-buying: LUNA six times between 11
+and 13 May 2022 (-100%, -100%, -100%, -98%, -97%, -85%), UST -62%. On coins that came back that
+pays, and the 17-coin panel contains only coins that came back.
+
+The underlying signal is not an artefact - AUC 0.547 on the pit universe, higher than on survivors
+- but it predicts how OFTEN a coin outperforms, and the confident tail is frequent small gains
+against rare total losses.
+
+**A data artefact found on the way.** LUNAUSDT's last bar before the collapse halted trading is
+13 May 2022 at a close of 0.00005; the same ticker resumes 18 days later, on 31 May, at 1.0 - a
+different coin, and a 20,000-fold jump in one row. A row-shifted forward return reads that as a
+gain: development first showed +908% a trade with the median trade at -0.27% and 100% of
+the profit in the best 1% of trades. Forward returns in `signal_rule_pit.py` are now computed
+within runs of consecutive bars, a position open when a run ends is closed at the last price that
+traded, and rows within 30 days of a relisting are not tradable. The pit panel has 7 trading stops
+longer than a week, in 7 coins; anything in `research/` that shifts by rows across them inherits
+this.
+
+### Try 3 - timing BTC and ETH: information in development, none on the holdout
+
+`timing_rule.py`. "Is up over the next bar" scored a pooled AUC of 0.558 in the search. Scored per
+coin, on the next bar's return when the score is in its trailing top fifth against its bottom fifth:
+
+| | development | holdout | pristine (340 bars) |
+|---|---|---|---|
+| BTC | +0.125% (t 2.88) | **+0.012% (t 0.22)** | +0.364% (t 2.08) |
+| ETH | +0.197% (t 3.58) | **-0.044% (t -0.53)** | +0.453% (t 1.71) |
+
+Present for 2020-2024, absent for 21 months, back for eight weeks of a crash. Nine rules were
+scored on development net of costs and none beat holding's Sharpe even there; every 4-hour-hold
+rule lost 50-70% a year to turnover. The pooled 0.558 was one market call counted seventeen times.
+
+### Try 4 - learn how much, on the universe with the dead in it: it ranks, and the top still loses
+
+`magnitude_model_pit.py`. The diagnosis after try 2 was that a frequency label on a panel with no
+dead coins could never teach a model that a collapsing coin is a bad pick. So the target became
+the 24-hour return against the day's average coin (clipped inside each training fold) and the
+universe became the pit members, 93 later-dead coins included.
+
+The model ranks. Spearman correlation between score and realised 24-hour spread, by quarter:
+
+| model | development | holdout |
+|---|---|---|
+| gradient boosting | +0.076, positive in 22 of 22 quarters (z 9.7) | +0.063, positive in 7 of 7 (z 6.6) |
+| ridge | +0.076, 22 of 22 (z 12.5) | +0.094, 7 of 7 (z 6.0) |
+
+Twenty-nine quarters out of twenty-nine, out of sample, on the survivorship-free universe. That is
+the most consistent predictive result in this log.
+
+And buying the top of that ranking loses money. Eight candidates were scored on development; the
+code chose gradient boosting with the top 2.5% of scores, held 24 hours.
+
+| | trades | net spread | median trade | winners | portfolio | maxDD |
+|---|---|---|---|---|---|---|
+| development | 8,705 | +0.563% (z 2.26, luck bar 2.04) | -0.226% | 48.5% | +131% a year | **-91%** |
+| holdout | 3,574 | **-0.477% (z -2.33)** | -0.554% | 40.8% | **-80%** | -84% |
+
+The holdout is not merely unprofitable, it is significantly negative. Training on the dead did not
+stop the crash-buying either: the eight worst trades are all LUNA between 11 and 12 May 2022, and
+the rule's 207 trades in LUNA, UST and FTT average -7.72%. When LUNA collapsed there was no earlier
+collapse of that kind inside the 730-day training window to learn from. A model can only be taught
+by a disaster after it has happened.
+
+### Where the skill is: the bottom of the ranking
+
+A ranking that is right in 29 of 29 quarters whose top loses money has its skill somewhere other
+than the top. `ranking_anatomy.py`, realised 24-hour return against the day's average coin by the
+model's within-bar score decile:
+
+| score decile | development | holdout |
+|---|---|---|
+| lowest | **-0.681%** (winners 35.8%) | **-0.866%** (38.9%) |
+| 2 | -0.248% | -0.130% |
+| 5 | -0.024% | +0.089% |
+| 9 | +0.188% | +0.159% |
+| highest | +0.402% (46.5%) | **+0.054%** (48.3%) |
+
+It is a detector of coins about to do badly. The highest decile has no edge left on the holdout;
+the lowest loses most of a percent a day in both periods. Highest minus lowest is +1.09% a day in
+development (z 6.6, 21 of 22 quarters) and +0.94% on the holdout (z 2.2, 5 of 7) - a description
+of the ranking, not a strategy: it needs a venue that allows shorting, pays two sets of costs, and
+the lowest decile's best single day on the holdout was +502% against the average coin, which is
+what an unbounded loss on a short looks like.
+
+Every rule in tries 1 to 4 was buying the end of the ranking that carries nothing.
+
+### Try 5 - the ranking as a veto on the bot's own entries: fails the gate on one panel only
+
+A spot account cannot sell what it does not own, so the only use for "this will do badly" is not
+buying. `ranking_anatomy.py` joined every breakout trade of the shipped configuration on the pit
+panel to the model's score at the bar the order was decided on:
+
+| model score at entry | development | holdout |
+|---|---|---|
+| bottom third | 187 trades, **-1.39%** average, 33.7% winners | 55 trades, **-4.62%**, 32.7% |
+| middle third | 76 trades, +9.20%, 51.3% | 25 trades, +1.81%, 32.0% |
+| top third | 228 trades, +5.77%, 42.1% | 31 trades, +2.70%, 48.4% |
+
+40% of the rotation's entries sit in the model's bottom third and they lose in both periods; rank
+correlation between score and trade return is +0.174 (491 trades) and +0.217 (111 trades).
+
+**That table was seen before any rule was fixed, so it is a description and not a test.** One rule
+was then fixed - veto a breakout entry whose within-bar score percentile is in the bottom third,
+the diagnostic's default cut, not tuned, pass-through where there is no out-of-sample score - and
+run through `backtest.run` with the existing `ml_veto` flag, so no trading code moved.
+
+| panel | period | CAGR | Sharpe | maxDD | trades | |
+|---|---|---|---|---|---|---|
+| pit | full | 22.15% -> **25.90%** | 1.0353 -> **1.2357** | -23.44% -> **-20.59%** | 867 -> 711 | pass |
+| pit | held-out 2022-26 | 11.96% -> **14.57%** | 0.6911 -> **0.8761** | -23.44% -> **-20.59%** | 469 -> 360 | pass |
+| standard | full | 27.95% -> 31.07% | 1.1590 -> 1.2668 | -26.50% -> -27.33% | 730 -> 677 | fail, maxDD |
+| standard | held-out | 22.70% -> 21.99% | 1.0416 -> 1.0531 | -26.50% -> -27.33% | 417 -> 383 | fail, CAGR and maxDD |
+
+**The ship rule fails, so it does not ship.** Both failing cells are on the standard panel and by
+under a point; both pit cells improve on all three metrics.
+
+The control, because P11 found information-free cuts pass this rule 7.5% to 22% of the time:
+twelve vetoes of the same size drawn at random per coin per day, pit held-out.
+
+| | CAGR | Sharpe | maxDD |
+|---|---|---|---|
+| shipped, no veto | 11.96% | 0.6911 | -23.44% |
+| random veto, mean of 12 | **9.90%** | **0.6322** | -21.43% |
+| random veto, best of 12 | 13.82% | 0.8170 | -17.21% |
+| **model veto** | **14.57%** | **0.8761** | -20.59% |
+
+A random veto of this size makes the book worse on average. 0 of 12 match the model on CAGR or
+on Sharpe; 3 of 12 match it on drawdown; 1 of 12 would itself have passed the ship rule on this
+cell, which is P11's rate again.
+
+This is P19's question about the gate, met in practice. A veto whose value is avoiding coins about
+to do badly is expected to look weakest on a panel assembled from coins that did not do badly, and
+that is the only place it fails.
+
+### What P22 establishes
+
+| claim | status |
+|---|---|
+| next-bar and 24-hour cross-sectional returns are predictable from Binance OHLCV | **yes** - AUC 0.53-0.55, IC +0.06 to +0.09, 29 of 29 quarters on the survivorship-free universe |
+| the predictable part is which coins will do well | **no** - the top decile has no edge on the holdout |
+| the predictable part is which coins will do badly | **yes** - lowest decile -0.68% and -0.87% a day against the average coin |
+| any long-only rule on the model's top picks pays its costs out of sample on the real universe | **no** - four tries, four failures, two of them significantly negative |
+| BTC or ETH can be timed with it | **no** - information in development, none on the holdout |
+| the ranking improves the trades the bot already takes | **on the honest panel, yes, and not by luck; under the ship rule as written, no** |
+
+The line in this log that every return model scores AUC 0.47-0.52 is superseded for short
+horizons with relationship features. The conclusion it supported is not: nothing here picks winners.
+
+Mistakes made and caught in this program, all mine: BTC's rows left in a beats-BTC target; a
+benchmark column printing one number under two names; a row-shifted return crediting a reused
+ticker with a 20,000-fold gain; a canned verdict sentence that misdescribed a one-panel failure;
+and two figures written from memory instead of from the data (the LUNA prices and the count of
+trading stops), one of which reached a commit message before it was checked.
+
+**Not done, and not to be done on this evidence:** shipping the veto. What it has earned is a
+shadow flag in a paper book - scoring every breakout candidate and logging what would have been
+vetoed, changing no trade - and the forward data that produces. That needs model training and
+inference the live loop does not have, on a 1 GB server that cannot train it, so it is an
+engineering decision as well as a research one.
+
+    python research/train_predict_grid.py       # the first grid, with its three artefacts
+    python research/predict_search.py           # try 1: 102 candidates, three-way split
+    python research/signal_anatomy.py           #        what the 4h signal is
+    python research/signal_rule.py              # try 2: the confidence rule on 17 survivors
+    python research/signal_rule_pit.py          #        the same rule on 383 coins
+    python research/timing_rule.py              # try 3: timing BTC and ETH
+    python research/magnitude_model_pit.py      # try 4: a magnitude model on the real universe
+    python research/ranking_anatomy.py          #        where the ranking's skill is
+    python research/rank_veto_ship.py           # try 5: the veto, the ship rule, the control
