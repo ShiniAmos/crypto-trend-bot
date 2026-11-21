@@ -2643,3 +2643,35 @@ fast as the bot trades and is the question that decides whether the veto ever sh
     python research/train_rank_model.py      # re-validate and export models/rank_model.json
     python -m app.rankscore --status         # on the server: what has been recorded
     python -m app.rankreport                 # on the server: what the record says
+
+
+### 21 Nov: one more day of data reshuffles the rankings, so the model is frozen
+
+The data was refreshed by a day and the model retrained, then compared with the deployed one on
+the last week of bars (42 bars, about 30 coins each):
+
+| | |
+|---|---|
+| rank correlation between the two fits, per bar | mean **0.83**, worst 0.70 |
+| veto decisions that flip | **188 of 1,260 (15%)** |
+
+The two fits differ only by one day at each end of a 730-day window, about 180 rows out of 131,000,
+and gradient boosting is deterministic here (no early stopping; binning sees every row). So this is
+the model's own variance: 250 boosted trees cascade a tiny data change into a different ranking of
+the middle of the field. Walk-forward results did not move - the bottom-third effect is a property
+of the method - but any single coin's score is fragile, and a record that mixes fits measures an
+average of them.
+
+**Policy: the shadow evaluation runs one frozen model, 942cc6297cd6, for its whole length.**
+`app/rankreport.py` now prints the model behind the record and warns if more than one appears.
+Retrain at the end of the evaluation, not during it. The retrained candidate is kept as
+`reports/rank_model_candidate_d48bcbd2869b.json` and not deployed. If the method is kept after the
+evaluation, averaging several fits is the obvious way to buy stability - and a model change that
+would need its own validation.
+
+The same refresh found a gap in `research/refresh_pit.py`: it chose which coins to download using
+the volume-only universe rule, and three coins that the coin rule admits in place of excluded
+stocks - BICO, HEI, LOKA, 5 member-days in all - had never been downloaded. Training lacked them
+while the live scorer, which fetches its own candles, would have included them. It now downloads
+the union of both rules; with them included the walk-forward figures moved in the third decimal
+(development IC +0.0763 -> +0.0750, fresh +0.0976 -> +0.0966).

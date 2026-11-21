@@ -23,7 +23,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from app import config, data, pit  # noqa: E402
+from app import config, data, pit, rankuniverse as ru  # noqa: E402
 
 
 def main(top_n=30):
@@ -43,17 +43,30 @@ def main(top_n=30):
     print(f"{len(syms)} USDT pairs ({len(set(listed) - set(have))} not seen before)")
 
     pit.fetch(s, syms, "1d", log=print)
-    member = pit.membership(kdir, [x for x in syms if pit.keep(x, s.exclude_memes)], top_n)
-    ever = sorted(set(member.columns[member.any()]) | {"BTCUSDT"})
-    print(f"{len(ever)} coins have been in the top {top_n} at some point; refreshing their 4h bars")
+    keep = [x for x in syms if pit.keep(x, s.exclude_memes)]
+    # 4h bars are needed for every coin either universe rule ever admits. The volume rule alone
+    # (app.pit) is what the older research panels use; the coin rule (app.rankuniverse) replaces
+    # excluded stocks and pegged tokens with the next coins by volume, and on 21 Nov 2026 three of
+    # those - BICO, HEI, LOKA - had never been in the volume top 30 and so had never been
+    # downloaded. Training silently lacked them while the live scorer, which fetches its own
+    # candles, would have included them.
+    member = pit.membership(kdir, keep, top_n)
+    vol, close, listed = ru.daily_frames(kdir, keep, data.load)
+    coins = ru.membership(vol, close, top_n, listed)
+    ever = sorted(set(member.columns[member.any()]) | set(coins.columns[coins.any()]) | {"BTCUSDT"})
+    print(f"{len(ever)} coins have been in either top {top_n} at some point; refreshing their 4h bars")
     pit.fetch(s, ever, "4h", log=print)
 
     after = data.load(kdir, "BTCUSDT", "4h")
     now = pd.to_datetime(after["close_time"].max(), unit="ms", utc=True)
-    today = member.index.max()
-    current = sorted(member.columns[member.loc[today]])
     print(f"pit cache now ends {now}  (+{len(after) - len(before)} BTC bars)")
-    print(f"today's top {top_n} by trailing 30-day volume ({today.date()}): {', '.join(current)}")
+    # The raw volume top 30 includes tokenized equities and pegged tokens; the model's universe
+    # does not (app/rankuniverse.py), so that is the list worth printing.
+    vol, close, listed = ru.daily_frames(kdir, keep, data.load)
+    coins = ru.membership(vol, close, top_n, listed)
+    today = coins.index.max()
+    print(f"today's top {top_n} COINS ({today.date()}): "
+          f"{', '.join(sorted(coins.columns[coins.loc[today]]))}")
     return 0
 
 

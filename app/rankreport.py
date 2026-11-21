@@ -145,7 +145,7 @@ def main(argv=None):
     if not db.exists():
         sys.exit(f"no shadow record at {db}")
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    sc = pd.read_sql("SELECT bar_time, symbol, pred, pct, would_veto FROM scores", con)
+    sc = pd.read_sql("SELECT bar_time, symbol, pred, pct, would_veto, model_id FROM scores", con)
     runs = pd.read_sql("SELECT * FROM runs", con)
     con.close()
     sc["bar_time"] = pd.to_datetime(sc["bar_time"], utc=True)
@@ -153,6 +153,17 @@ def main(argv=None):
     print(f"shadow record: {len(sc)} scores over {sc['bar_time'].nunique()} bars, {first} to {last}")
     print(f"runs: {len(runs)} ({int((runs['status'] == 'ok').sum())} ok, "
           f"{int((runs['status'] == 'error').sum())} errors)")
+    # Retraining on one extra day moved the rankings to a mean rank correlation of 0.83 with the
+    # previous fit and flipped 15% of veto decisions (RESEARCH_LOG.md P23). A record that mixes
+    # models measures an average of noisy fits, so the evaluation runs one frozen model and this
+    # says loudly when that has not held.
+    ids = sc.groupby("model_id")["bar_time"].agg(["min", "max", "count"])
+    if len(ids) > 1:
+        print(f"WARNING: {len(ids)} different models in this record - results below mix them:")
+        for mid, r_ in ids.iterrows():
+            print(f"  model {mid}: {int(r_['count'])} scores, {r_['min']} to {r_['max']}")
+    else:
+        print(f"model: {ids.index[0]} for the whole record")
     gaps = runs[runs["message"].fillna("").str.contains("missed")]
     if len(gaps):
         print(f"  {len(gaps)} run(s) reported unrecoverable missed bars")
