@@ -292,3 +292,19 @@ def test_the_report_opens_trading_books_read_only():
     for line in src.splitlines():
         if "sqlite3.connect" in line:
             assert "mode=ro" in line, f"a database is opened writable: {line.strip()}"
+
+
+def test_days_to_verdict_is_the_standard_error_arithmetic():
+    """The report's 'a verdict needs about N days' line. At N days the expected mean sits two
+    standard errors from zero, and one day fewer it does not."""
+    from app import rankreport
+    assert rankreport.days_to_verdict(0.0759, 0.2615) == 48          # rank correlation
+    assert rankreport.days_to_verdict(-0.00383, 0.02478) == 168      # bottom third minus rest
+    n = rankreport.days_to_verdict(0.01, 0.05)
+    assert 0.01 / (0.05 / n ** 0.5) >= 2.0 > 0.01 / (0.05 / (n - 1) ** 0.5)
+
+
+def test_the_progress_line_refuses_to_judge_two_days():
+    from app import rankreport
+    line = rankreport.progress_line("x", pd.Series([0.1, 0.2]), 0.0759, 0.2615)
+    assert "2 independent days" in line and "z" not in line.split("so far")[0]

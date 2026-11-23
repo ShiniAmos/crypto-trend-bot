@@ -146,6 +146,24 @@ def main():
     print("\n  P22 on the old universe, for comparison: development IC +0.076 (22/22),")
     print("  holdout +0.063 (7/7); lowest decile -0.68% / -0.87% a day.")
 
+    # What a working model looks like ONE BAR A DAY since 2025. The forward record holds about one
+    # independent observation a day (30 coins move together; 24h windows overlap), so these set
+    # how long a shadow evaluation must run before it can say anything. Stored with the model and
+    # read by app/rankreport.py.
+    from app.rankreport import days_to_verdict
+    daily = d[(d["bar_time"] >= DEV_END) & (d["bar_time"].dt.hour == 0)].dropna(subset=["y"])
+    ic_d = daily.groupby("bar_time").apply(lambda g: g["pred"].corr(g["y"], method="spearman"),
+                                           include_groups=False).dropna()
+    sp_d = (daily[daily["pct"] <= 1 / 3].groupby("bar_time")["y"].mean()
+            - daily[daily["pct"] > 1 / 3].groupby("bar_time")["y"].mean()).dropna()
+    forward = {"ic_mean": float(ic_d.mean()), "ic_sd": float(ic_d.std()),
+               "spread_mean": float(sp_d.mean()), "spread_sd": float(sp_d.std())}
+    print(f"\n  one bar a day since 2025 ({len(ic_d)} days): rank correlation "
+          f"{forward['ic_mean']:+.4f} (sd {forward['ic_sd']:.4f}) -> about "
+          f"{days_to_verdict(forward['ic_mean'], forward['ic_sd'])} forward days to z = 2;")
+    print(f"  bottom third minus the rest {forward['spread_mean']:+.3%} (sd {forward['spread_sd']:.3%}) "
+          f"-> about {days_to_verdict(forward['spread_mean'], forward['spread_sd'])} days")
+
     ok = all(r["ic"] > 0 for r in rep.values()) and rep.get(
         "holdout 2025 -> 2026-10-04", {}).get("z", 0) > 2
     if not ok:
@@ -167,7 +185,7 @@ def main():
             "train_rows": int(tr.sum()), "train_days": TRAIN_DAYS, "horizon_bars": rf.HORIZON,
             "label": "24h forward return minus the bar's average member, clipped to [1%, 99%]",
             "label_clip": [float(lo), float(hi)], "universe": f"rankuniverse top {TOP_N} coins",
-            "revalidation": rep}
+            "revalidation": rep, "forward_expectation": forward}
     mid, worst = rankmodel.export(model, names, X[tr][-20000:], OUT, meta=meta)
     print(f"  exported {OUT.relative_to(ROOT)}: model {mid}, {len(model._predictors)} trees, "
           f"export check max difference {worst:.1e}")

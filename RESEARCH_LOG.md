@@ -2675,3 +2675,26 @@ stocks - BICO, HEI, LOKA, 5 member-days in all - had never been downloaded. Trai
 while the live scorer, which fetches its own candles, would have included them. It now downloads
 the union of both rules; with them included the walk-forward figures moved in the third decimal
 (development IC +0.0763 -> +0.0750, fresh +0.0976 -> +0.0966).
+
+
+### 23 Nov: correction - the forward test needs months, not weeks
+
+P23 said the bottom-third figure gets "180 observations a day, meaningful within weeks", and that
+about three months would decide it. Both were wrong. The 30 coins in a bar move together and each
+bar's 24-hour window overlaps the next five, so the record holds about **one independent
+observation a day**. Measured on the 2025-26 walk-forward, one bar a day (689 days):
+
+| measure | a working model averages | day-to-day sd | days to z = 2 |
+|---|---|---|---|
+| rank correlation (does it still rank coins) | +0.076 | 0.26 | **about 48** |
+| bottom third minus the rest (what the veto uses) | -0.38% | 2.5% | **about 168** |
+
+At three months the bottom-third figure would read z of about 1.5 even if the model works exactly
+as it did in 2025-26. So the evaluation answers in two stages: whether the model still ranks coins
+after about seven weeks, and whether its bottom third is reliably worse after about five and a
+half months. `app/rankreport.py` now prints both with their progress, and models exported from now
+on carry these figures in their meta (`forward_expectation`).
+
+The first report (23 Nov, 4 independent days): rank correlation -0.007, bottom third minus the rest
++0.35%. That reads as nothing, and it should: if the model works exactly as it did in 2025-26, a
+4-day average at least that unfavourable turns up about a third of the time.

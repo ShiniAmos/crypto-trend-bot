@@ -7,20 +7,22 @@ Two questions, answered from data/rank/shadow.sqlite and Binance's public candle
   1. IS THE MODEL STILL RIGHT? For every scored bar at least 24 hours old, the realised 24-hour
      return of each scored coin against that bar's average scored coin - the model's own label,
      recomputed here from candles rather than trusted from the scorer. Rank correlation per bar,
-     and the bottom third against the rest. This accumulates 30 observations a bar, 180 a day,
-     so it says something within weeks.
+     and the bottom third against the rest.
   2. WOULD THE VETO HAVE HELPED THE BOT? Every breakout entry the three books took since scoring
      began, joined to the model's percentile at the bar the order was decided on, and the trade's
      realised return. This accumulates only as fast as the bot trades - slowly - and it is the
      question that decides whether the veto ever ships.
 
-Overlapping 24-hour windows are not independent, so significance is computed on one bar per day
-(the 00:00 close), and the means on all bars.
+HOW LONG IT TAKES. The 30 coins in a bar move together, and each bar's 24-hour window overlaps the
+next five, so the record holds about ONE independent observation a day - not 180, as the first
+version of this file claimed. Measured on the 2025-26 walk-forward, one bar a day (689 days):
 
-Expectations from training (research/train_rank_model.py, corrected universe): the bottom third
-returned -0.29% a day against the average coin in development, -0.24% on the holdout and -0.29% on
-seven weeks of unseen data. A forward figure well inside that range is the model holding up; a
-figure near zero over a few months is the model not holding up.
+    daily rank correlation       mean +0.076, day-to-day sd 0.26   ->  about 48 days to z = 2
+    bottom third minus the rest  mean -0.38%, day-to-day sd 2.5%   ->  about 168 days to z = 2
+
+So the rank correlation answers "does the model still rank coins" in about seven weeks, while the
+bottom-third spread - the thing the veto actually uses - needs about five and a half months. Both
+are printed with their progress on every run; significance uses the 00:00 bar of each day only.
 """
 
 import argparse
@@ -34,8 +36,27 @@ import pandas as pd
 from . import config, data
 
 H = 6
-EXPECT = {"development": -0.0029, "holdout": -0.0024, "unseen 7 weeks": -0.0029}
 BOOKS = ("paper", "paper100", "demo")
+# What each measure looks like one bar a day when the model works: the 2025-26 walk-forward of
+# research/train_rank_model.py, 23 Nov 2026. A model exported with `forward_expectation` in its
+# meta overrides these.
+EXPECT = {"ic_mean": 0.0759, "ic_sd": 0.2615, "spread_mean": -0.00383, "spread_sd": 0.02478}
+
+
+def days_to_verdict(mean, sd, z=2.0):
+    """Independent days before a measure averaging `mean` with daily sd `sd` reads z."""
+    return int(np.ceil((z * sd / abs(mean)) ** 2)) if mean else None
+
+
+def progress_line(label, values, mean, sd):
+    n = len(values)
+    need = days_to_verdict(mean, sd)
+    if n < 3:
+        return f"  {label}: {n} independent days so far; a verdict needs about {need}"
+    m, se = float(values.mean()), float(values.std(ddof=1)) / np.sqrt(n)
+    z = m / se if se else float("nan")
+    return (f"  {label}: {m:+.4f} over {n} days (z {z:+.2f}). A working model averages "
+            f"{mean:+.4f}; a verdict needs about {need} days - {min(n / need, 1):.0%} of the way")
 
 
 def _outcomes(kdir, symbols, first, last):
@@ -69,7 +90,7 @@ def _outcomes(kdir, symbols, first, last):
     return pd.concat(out, ignore_index=True) if out else pd.DataFrame(columns=["bar_time", "symbol", "fwd"])
 
 
-def model_health(sc, oc):
+def model_health(sc, oc, expect=EXPECT):
     d = sc.merge(oc, on=["bar_time", "symbol"], how="inner").dropna(subset=["fwd"])
     if d.empty:
         print("  no scored bar is 24 hours old yet")
@@ -81,21 +102,15 @@ def model_health(sc, oc):
     by = d.groupby(third, observed=False)["x"].mean()
     spread = (d[d["pct"] <= 1 / 3].groupby("bar_time")["x"].mean()
               - d[d["pct"] > 1 / 3].groupby("bar_time")["x"].mean()).dropna()
-    daily = spread[spread.index.hour == 0]
-    z = (daily.mean() / (daily.std(ddof=1) / np.sqrt(len(daily)))) if len(daily) > 2 else float("nan")
     print(f"  {d['bar_time'].nunique()} bars matured, {len(d)} coin-bars, "
           f"{d['bar_time'].min()} to {d['bar_time'].max()}")
-    print(f"  rank correlation per bar: mean {ic.mean():+.4f}, positive on {int((ic > 0).sum())} of "
-          f"{len(ic)} bars")
-    print(f"  24h return against the average scored coin:  bottom third {by['bottom']:+.3%}   "
-          f"middle {by['middle']:+.3%}   top third {by['top']:+.3%}")
-    print(f"  bottom third minus the rest: {spread.mean():+.3%} a day; on {len(daily)} "
-          f"non-overlapping days z = {z:.2f}")
-    print("  training expectation for the bottom third: " + ", ".join(
-        f"{k} {v:+.2%}" for k, v in EXPECT.items()))
-    if len(daily) < 30:
-        print(f"  ({len(daily)} independent days is too few to conclude anything; a month of data"
-              " is the minimum for this line to mean something)")
+    print(f"  24h return against the average scored coin, all bars:  bottom third "
+          f"{by['bottom']:+.3%}   middle {by['middle']:+.3%}   top third {by['top']:+.3%}")
+    print()
+    print(progress_line("rank correlation", ic[ic.index.hour == 0],
+                        expect["ic_mean"], expect["ic_sd"]))
+    print(progress_line("bottom third minus the rest", spread[spread.index.hour == 0],
+                        expect["spread_mean"], expect["spread_sd"]))
 
 
 def veto_check(sc, data_dir, first):
@@ -169,9 +184,15 @@ def main(argv=None):
         print(f"  {len(gaps)} run(s) reported unrecoverable missed bars")
 
     print("\n1. IS THE MODEL STILL RIGHT?")
+    expect = dict(EXPECT)
+    model_file = Path(__file__).resolve().parent.parent / "models" / "rank_model.json"
+    if model_file.exists():
+        import json
+        meta = json.loads(model_file.read_text(encoding="utf-8")).get("meta", {})
+        expect.update(meta.get("forward_expectation", {}))
     mature = sc[sc["bar_time"] <= pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=4 * H + 4)]
     oc = _outcomes(base / "outcomes", sorted(mature["symbol"].unique()), first, last)
-    model_health(mature, oc)
+    model_health(mature, oc, expect)
 
     print("\n2. WOULD THE VETO HAVE HELPED THE BOT?")
     veto_check(sc, s.data_dir, first)
